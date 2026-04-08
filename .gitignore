@@ -1,0 +1,25 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.idea/
+*.swp
+
+## env / secrets
+appsettings.Development.json
+.env
+*.env
+
+## test output
+TestResults/
+coverage/
+*.trx
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Docker volumes (if mounted locally)
+pgdata/
