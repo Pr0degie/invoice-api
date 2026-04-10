@@ -1,0 +1,88 @@
+using InvoiceApi.Data;
+using InvoiceApi.Exceptions;
+using InvoiceApi.Models;
+using InvoiceApi.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace InvoiceApi.Controllers;
+
+[ApiController]
+[Route("api/invoices")]
+[Produces("application/json")]
+public class InvoicesController(IInvoiceService invoices) : ControllerBase
+{
+    /// <summary>Create a new invoice.</summary>
+    [HttpPost]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Create([FromBody] CreateInvoiceRequest request, CancellationToken ct)
+    {
+        var result = await invoices.CreateAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+    }
+
+    /// <summary>Get a single invoice by ID.</summary>
+    [HttpGet("{id:guid}")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await invoices.GetAsync(id, ct));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>List invoices with optional status filter and pagination.</summary>
+    [HttpGet]
+    [ProducesResponseType<List<InvoiceResponse>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(
+        [FromQuery] InvoiceStatus? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken ct = default)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        return Ok(await invoices.ListAsync(status, page, pageSize, ct));
+    }
+
+    /// <summary>Update the status of an invoice (e.g. mark as Paid).</summary>
+    [HttpPatch("{id:guid}/status")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateStatusRequest request, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await invoices.UpdateStatusAsync(id, request.Status, ct));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+   
+
+    /// <summary>Delete a draft invoice.</summary>
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        try
+        {
+            await invoices.DeleteAsync(id, ct);
+            return NoContent();
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+}
