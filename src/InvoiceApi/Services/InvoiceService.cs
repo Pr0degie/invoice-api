@@ -22,7 +22,7 @@ public class InvoiceService(AppDbContext db) : IInvoiceService
 
         var invoice = new Invoice
         {
-Number = await GenerateNumberAsync(ct) ?? "INV-ERROR",
+            Number = await GenerateNumberAsync(ct),
             SenderName = req.SenderName,
             SenderAddress = req.SenderAddress,
             RecipientName = req.RecipientName,
@@ -97,7 +97,7 @@ Number = await GenerateNumberAsync(ct) ?? "INV-ERROR",
 
     // ---
 
-    private async Task<string?> GenerateNumberAsync(CancellationToken ct)
+    private async Task<string> GenerateNumberAsync(CancellationToken ct)
     {
         var year = DateTime.UtcNow.Year;
         var count = await db.Invoices.CountAsync(i => i.IssueDate.Year == year, ct);
