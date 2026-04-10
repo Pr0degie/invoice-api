@@ -10,7 +10,7 @@ namespace InvoiceApi.Controllers;
 [ApiController]
 [Route("api/invoices")]
 [Produces("application/json")]
-public class InvoicesController(IInvoiceService invoices) : ControllerBase
+public class InvoicesController(IInvoiceService invoices, IPdfService pdf, AppDbContext db) : ControllerBase
 {
     /// <summary>Create a new invoice.</summary>
     [HttpPost]
@@ -67,7 +67,22 @@ public class InvoicesController(IInvoiceService invoices) : ControllerBase
         }
     }
 
-   
+    /// <summary>Download the invoice as a PDF.</summary>
+    [HttpGet("{id:guid}/pdf")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadPdf(Guid id, CancellationToken ct)
+    {
+        var invoice = await db.Invoices
+            .Include(i => i.LineItems)
+            .FirstOrDefaultAsync(i => i.Id == id, ct);
+
+        if (invoice is null)
+            return NotFound(new { error = $"Invoice {id} not found." });
+
+        var bytes = pdf.Generate(invoice);
+        return File(bytes, "application/pdf", $"{invoice.Number}.pdf");
+    }
 
     /// <summary>Delete a draft invoice.</summary>
     [HttpDelete("{id:guid}")]
