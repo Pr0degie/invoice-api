@@ -7,6 +7,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 {
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<LineItem> LineItems => Set<LineItem>();
+    public DbSet<User> Users => Set<User>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -22,6 +24,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .HasForeignKey(li => li.InvoiceId)
              .OnDelete(DeleteBehavior.Cascade);
 
+            e.HasOne(x => x.User)
+             .WithMany(u => u.Invoices)
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+
             // don't store computed columns
             e.Ignore(x => x.Subtotal);
             e.Ignore(x => x.TaxAmount);
@@ -34,6 +41,27 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.UnitPrice).HasPrecision(18, 2);
             e.Property(x => x.Quantity).HasPrecision(18, 4);
             e.Ignore(x => x.Total);
+        });
+
+        b.Entity<User>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Email).IsRequired().HasMaxLength(256);
+            e.HasIndex(x => x.Email).IsUnique();
+            e.Property(x => x.Name).IsRequired().HasMaxLength(200);
+            e.Property(x => x.PasswordHash).IsRequired();
+        });
+
+        b.Entity<RefreshToken>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Token).IsRequired().HasMaxLength(256);
+            e.HasIndex(x => x.Token).IsUnique();
+            e.HasOne(x => x.User)
+             .WithMany(u => u.RefreshTokens)
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.Ignore(x => x.IsRevoked);
         });
     }
 }

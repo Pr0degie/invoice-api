@@ -51,6 +51,21 @@ Swagger UI: [http://localhost:8080/swagger](http://localhost:8080/swagger)
 
 ## API overview
 
+### Auth endpoints (public)
+
+```
+POST   /api/auth/register   — create account → { token, refreshToken, expiresAt, user }
+POST   /api/auth/login      — sign in        → { token, refreshToken, expiresAt, user }
+POST   /api/auth/refresh    — rotate tokens  → { token, refreshToken, expiresAt, user }
+POST   /api/auth/logout     — revoke refresh token
+GET    /api/auth/me         — current user info  [requires Bearer token]
+```
+
+### Invoice endpoints (require Bearer token)
+
+All `/api/invoices/*` endpoints return 401 without a valid JWT.
+Invoices are isolated per user — each user only sees their own.
+
 ```
 POST   /api/invoices              — create invoice
 GET    /api/invoices              — list (filter: ?status=Paid&page=1&pageSize=25)
@@ -58,15 +73,24 @@ GET    /api/invoices/{id}         — get single invoice
 PATCH  /api/invoices/{id}/status  — update status
 GET    /api/invoices/{id}/pdf     — download as PDF
 DELETE /api/invoices/{id}         — delete draft
-GET    /health                    — health check
 ```
 
 Full spec available via Swagger when running locally.
 
-### Example request
+### Example: register + create invoice
 
 ```http
+# 1. Register
+POST /api/auth/register
+Content-Type: application/json
+
+{ "email": "tobias@example.com", "password": "supersecret", "name": "Tobias Dev" }
+
+# Response: { "token": "<jwt>", "refreshToken": "...", ... }
+
+# 2. Create invoice (use token from step 1)
 POST /api/invoices
+Authorization: Bearer <jwt>
 Content-Type: application/json
 
 {

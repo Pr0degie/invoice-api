@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.cs$\")",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(dotnet add *)",
+      "Bash(\"/mnt/c/Program Files/dotnet/dotnet.exe\" --version)",
+      "Bash($DOTNET add *)",
+      "Bash(mkdir -p /mnt/c/Users/tobo2/repos/invoice-api/src/InvoiceApi/Models/Entities)",
+      "Bash(mkdir -p /mnt/c/Users/tobo2/repos/invoice-api/src/InvoiceApi/Models/Dtos/Auth)",
+      "Bash(mkdir -p /mnt/c/Users/tobo2/repos/invoice-api/src/InvoiceApi/InvoiceApi.Tests/Auth)",
+      "Bash($DOTNET build *)",
+      "Bash('/mnt/c/Program Files/dotnet/dotnet.exe' test src/InvoiceApi/InvoiceApi.Tests/InvoiceApi.Tests.csproj --no-build)",
+      "Bash('/mnt/c/Program Files/dotnet/dotnet.exe' test src/InvoiceApi/InvoiceApi.Tests/InvoiceApi.Tests.csproj)",
+      "Bash('/mnt/c/Program Files/dotnet/dotnet.exe' tool list -g)",
+      "Bash($DOTNET tool *)",
+      "Bash($DOTNET ef *)",
+      "Bash('/mnt/c/Program Files/dotnet/dotnet.exe' build src/InvoiceApi/InvoiceApi.csproj)",
+      "Bash(sort echo *)",
+      "Bash(git mv *)",
+      "Bash(git restore *)",
+      "Bash(dotnet sln *)",
+      "Bash(export PATH=\"$PATH:/usr/local/share/dotnet:/usr/share/dotnet\")",
+      "Read(//usr/**)",
+      "Read(//mnt/c/Users/tobo2/.dotnet/**)",
+      "Read(//home/fistus/.dotnet/**)",
+      "Bash(/mnt/c/Program Files/dotnet/dotnet.exe restore *)",
+      "Bash(/mnt/c/Program Files/dotnet/dotnet.exe build *)",
+      "Bash(/mnt/c/Program Files/dotnet/dotnet.exe test *)",
+      "Bash(docker compose build *)",
+      "Bash(docker compose *)",
+      "Bash(curl -sS --max-time 5 http://localhost:8080/health)",
+      "Bash(curl -v http://localhost:8080/health)",
+      "Bash(curl *)"
+    ]
+  }
+}

@@ -4,7 +4,11 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # Required environment variables:
+      # ConnectionStrings__Default=...          (PostgreSQL connection string)
+      # Jwt__SigningKey=<at least 32 chars, production-specific>
       - ConnectionStrings__Default=Host=db;Database=invoiceapi;Username=postgres;Password=postgres
+      - Jwt__SigningKey=docker-compose-dev-signing-key-change-before-production-use
     depends_on:
       db:
         condition: service_healthy

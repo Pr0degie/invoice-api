@@ -14,14 +14,16 @@ public interface IInvoiceService
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
-public class InvoiceService(AppDbContext db) : IInvoiceService
+public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : IInvoiceService
 {
     public async Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest req, CancellationToken ct = default)
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
+        var userId = currentUser.CurrentUserId;
 
         var invoice = new Invoice
         {
+            UserId = userId,
             Number = await GenerateNumberAsync(ct),
             SenderName = req.SenderName,
             SenderAddress = req.SenderAddress,
@@ -49,9 +51,11 @@ public class InvoiceService(AppDbContext db) : IInvoiceService
 
     public async Task<InvoiceResponse> GetAsync(Guid id, CancellationToken ct = default)
     {
+        var userId = currentUser.CurrentUserId;
+
         var invoice = await db.Invoices
             .Include(i => i.LineItems)
-            .FirstOrDefaultAsync(i => i.Id == id, ct)
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
         return invoice.ToResponse();
@@ -59,7 +63,8 @@ public class InvoiceService(AppDbContext db) : IInvoiceService
 
     public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, CancellationToken ct = default)
     {
-        var query = db.Invoices.Include(i => i.LineItems).AsQueryable();
+        var userId = currentUser.CurrentUserId;
+        var query = db.Invoices.Include(i => i.LineItems).Where(i => i.UserId == userId);
 
         if (status.HasValue)
             query = query.Where(i => i.Status == status.Value);
@@ -74,9 +79,11 @@ public class InvoiceService(AppDbContext db) : IInvoiceService
 
     public async Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default)
     {
+        var userId = currentUser.CurrentUserId;
+
         var invoice = await db.Invoices
             .Include(i => i.LineItems)
-            .FirstOrDefaultAsync(i => i.Id == id, ct)
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
         invoice.Status = newStatus;
@@ -88,7 +95,10 @@ public class InvoiceService(AppDbContext db) : IInvoiceService
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
-        var invoice = await db.Invoices.FindAsync([id], ct)
+        var userId = currentUser.CurrentUserId;
+
+        var invoice = await db.Invoices
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
         db.Invoices.Remove(invoice);

@@ -11,6 +11,7 @@ public class InvoiceServiceTests : IDisposable
 {
     private readonly AppDbContext _db;
     private readonly InvoiceService _sut;
+    private readonly Guid _userId = Guid.NewGuid();
 
     public InvoiceServiceTests()
     {
@@ -19,15 +20,13 @@ public class InvoiceServiceTests : IDisposable
             .Options;
 
         _db = new AppDbContext(opts);
-        _sut = new InvoiceService(_db);
+        _sut = new InvoiceService(_db, new FakeCurrentUserService(_userId));
     }
 
     [Fact]
     public async Task CreateAsync_ShouldPersistInvoice()
     {
-        var request = BuildRequest();
-
-        var result = await _sut.CreateAsync(request);
+        var result = await _sut.CreateAsync(BuildRequest());
 
         result.Should().NotBeNull();
         result.Number.Should().StartWith("INV-");
@@ -38,9 +37,7 @@ public class InvoiceServiceTests : IDisposable
     public async Task CreateAsync_ShouldCalculateTotalsCorrectly()
     {
         // 2h à 80 + 1 flat à 50 = 210 net, 19% = 39.90, total = 249.90
-        var request = BuildRequest();
-
-        var result = await _sut.CreateAsync(request);
+        var result = await _sut.CreateAsync(BuildRequest());
 
         result.Subtotal.Should().Be(210m);
         result.TaxAmount.Should().Be(39.90m);
@@ -112,6 +109,50 @@ public class InvoiceServiceTests : IDisposable
         await act.Should().ThrowAsync<NotFoundException>();
     }
 
+    [Fact]
+    public async Task GetAsync_ShouldNotReturnOtherUsersInvoice()
+    {
+        // Arrange: create invoice as user A
+        var invoiceA = await _sut.CreateAsync(BuildRequest());
+
+        // Act: try to access it as user B
+        var userBService = new InvoiceService(_db, new FakeCurrentUserService(Guid.NewGuid()));
+        var act = () => userBService.GetAsync(invoiceA.Id);
+
+        // Assert: 404 (not 403 — don't leak existence)
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldIsolateInvoicesPerUser()
+    {
+        // Arrange: create two invoices for user A, one for user B
+        await _sut.CreateAsync(BuildRequest());
+        await _sut.CreateAsync(BuildRequest());
+
+        var userBService = new InvoiceService(_db, new FakeCurrentUserService(Guid.NewGuid()));
+        await userBService.CreateAsync(BuildRequest());
+
+        // Act
+        var userAInvoices = await _sut.ListAsync(null, 1, 100);
+        var userBInvoices = await userBService.ListAsync(null, 1, 100);
+
+        // Assert
+        userAInvoices.Should().HaveCount(2);
+        userBInvoices.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldThrow_WhenDeletingOtherUsersInvoice()
+    {
+        var invoice = await _sut.CreateAsync(BuildRequest());
+
+        var userBService = new InvoiceService(_db, new FakeCurrentUserService(Guid.NewGuid()));
+        var act = () => userBService.DeleteAsync(invoice.Id);
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
     // ---
 
     private static CreateInvoiceRequest BuildRequest() => new()
@@ -129,4 +170,9 @@ public class InvoiceServiceTests : IDisposable
     };
 
     public void Dispose() => _db.Dispose();
+}
+
+internal class FakeCurrentUserService(Guid userId) : ICurrentUserService
+{
+    public Guid CurrentUserId => userId;
 }

@@ -2,6 +2,7 @@ using InvoiceApi.Data;
 using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using InvoiceApi.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,7 +11,12 @@ namespace InvoiceApi.Controllers;
 [ApiController]
 [Route("api/invoices")]
 [Produces("application/json")]
-public class InvoicesController(IInvoiceService invoices, IPdfService pdf, AppDbContext db) : ControllerBase
+[Authorize]
+public class InvoicesController(
+    IInvoiceService invoices,
+    IPdfService pdf,
+    AppDbContext db,
+    ICurrentUserService currentUser) : ControllerBase
 {
     /// <summary>Create a new invoice.</summary>
     [HttpPost]
@@ -73,9 +79,11 @@ public class InvoicesController(IInvoiceService invoices, IPdfService pdf, AppDb
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DownloadPdf(Guid id, CancellationToken ct)
     {
+        var userId = currentUser.CurrentUserId;
+
         var invoice = await db.Invoices
             .Include(i => i.LineItems)
-            .FirstOrDefaultAsync(i => i.Id == id, ct);
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct);
 
         if (invoice is null)
             return NotFound(new { error = $"Invoice {id} not found." });

@@ -1,0 +1,10 @@
+**/bin
+**/obj
+tests/
+.git
+.vs
+.vscode
+*.md
+.env
+.env.local
+.env.example
