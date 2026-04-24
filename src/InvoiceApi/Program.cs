@@ -1,7 +1,9 @@
 using System.Text;
+using System.Threading.RateLimiting;
 using InvoiceApi.Data;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -14,9 +16,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
 
-// Database
+// DATABASE_URL adapter — Railway provides postgres://user:pass@host:port/db
+var connectionString = ParseDatabaseUrl(builder.Configuration["DATABASE_URL"])
+    ?? builder.Configuration.GetConnectionString("Default");
+
 builder.Services.AddDbContext<AppDbContext>(opts =>
-    opts.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+    opts.UseNpgsql(connectionString));
 
 // Services
 builder.Services.AddHttpContextAccessor();
@@ -25,7 +30,9 @@ builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+builder.Services.AddScoped<IStatsService, StatsService>();
 builder.Services.AddScoped<IPdfService, PdfService>();
+builder.Services.AddScoped<SeedService>();
 
 // JWT auth
 var jwtSection = builder.Configuration.GetSection("Jwt");
@@ -50,6 +57,52 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+
+// Rate limiting — per-IP for auth, per-user for API
+builder.Services.AddRateLimiter(opts =>
+{
+    opts.AddPolicy("auth-ip", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+
+    opts.AddPolicy("api-user", ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.User.FindFirst("sub")?.Value
+                          ?? ctx.Connection.RemoteIpAddress?.ToString()
+                          ?? "anon",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1)
+            }));
+
+    opts.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
+
+// CORS — named policy, exact origins + Vercel preview pattern
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+
+builder.Services.AddCors(opts =>
+    opts.AddPolicy("InvoiceFlowFrontend", p =>
+        p.SetIsOriginAllowed(origin =>
+        {
+            if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
+                return true;
+
+            // Allow Vercel preview deployments without wildcards in config
+            return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                && uri.Scheme == "https"
+                && uri.Host.StartsWith("invoiceflow-", StringComparison.OrdinalIgnoreCase)
+                && uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase);
+        })
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials()));
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -77,15 +130,6 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-builder.Services.AddCors(opts =>
-    opts.AddDefaultPolicy(p =>
-        p.WithOrigins(
-            builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-                ?? ["http://localhost:3000"])
-         .AllowAnyMethod()
-         .AllowAnyHeader()
-         .AllowCredentials()));
-
 var app = builder.Build();
 
 // Startup key validation — fails fast with a clear message
@@ -103,9 +147,24 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
+
+    if (app.Configuration.GetValue<bool>("Seed:Enabled"))
+    {
+        var seeder = scope.ServiceProvider.GetRequiredService<SeedService>();
+        await seeder.SeedAsync();
+    }
 }
 
 app.UseSerilogRequestLogging();
+
+// Security headers — HSTS is handled at the edge (Railway / Cloudflare)
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    ctx.Response.Headers.Append("X-Frame-Options", "DENY");
+    ctx.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    await next();
+});
 
 if (app.Environment.IsDevelopment())
 {
@@ -113,7 +172,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseCors();
+app.UseCors("InvoiceFlowFrontend");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
@@ -130,8 +190,29 @@ app.MapGet("/health", async (AppDbContext db, CancellationToken ct) =>
     {
         return Results.StatusCode(503);
     }
-}).AllowAnonymous();
+}).AllowAnonymous().DisableRateLimiting();
+
 app.Run();
+
+// Converts Railway's DATABASE_URL (postgres://user:pass@host:port/db) to Npgsql format
+static string? ParseDatabaseUrl(string? databaseUrl)
+{
+    if (string.IsNullOrEmpty(databaseUrl)) return null;
+    try
+    {
+        var uri = new Uri(databaseUrl);
+        var userInfo = uri.UserInfo.Split(':', 2);
+        var user = userInfo[0];
+        var pass = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
+        var port = uri.Port > 0 ? uri.Port : 5432;
+        var db = uri.AbsolutePath.TrimStart('/');
+        return $"Host={uri.Host};Port={port};Database={db};Username={user};Password={pass};SSL Mode=Require;Trust Server Certificate=true";
+    }
+    catch
+    {
+        return null;
+    }
+}
 
 // Expose for integration tests
 public partial class Program { }

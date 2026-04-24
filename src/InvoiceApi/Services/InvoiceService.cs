@@ -21,6 +21,15 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         var today = DateOnly.FromDateTime(DateTime.Today);
         var userId = currentUser.CurrentUserId;
 
+        var lineItems = req.LineItems.Select(li => new LineItem
+        {
+            Description = li.Description,
+            Quantity = li.Quantity,
+            UnitPrice = li.UnitPrice,
+            Unit = li.Unit
+        }).ToList();
+
+        var subtotal = lineItems.Sum(li => li.Total);
         var invoice = new Invoice
         {
             UserId = userId,
@@ -34,13 +43,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             TaxRate = req.TaxRate,
             Currency = req.Currency.ToUpperInvariant(),
             Notes = req.Notes,
-            LineItems = req.LineItems.Select(li => new LineItem
-            {
-                Description = li.Description,
-                Quantity = li.Quantity,
-                UnitPrice = li.UnitPrice,
-                Unit = li.Unit
-            }).ToList()
+            LineItems = lineItems,
+            TotalAmount = subtotal + Math.Round(subtotal * req.TaxRate, 2)
         };
 
         db.Invoices.Add(invoice);
@@ -88,6 +92,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
 
         invoice.Status = newStatus;
         invoice.UpdatedAt = DateTimeOffset.UtcNow;
+        invoice.PaidAt = newStatus == InvoiceStatus.Paid
+            ? DateOnly.FromDateTime(DateTime.UtcNow)
+            : null;
 
         await db.SaveChangesAsync(ct);
         return invoice.ToResponse();

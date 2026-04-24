@@ -69,6 +69,7 @@ Invoices are isolated per user — each user only sees their own.
 ```
 POST   /api/invoices              — create invoice
 GET    /api/invoices              — list (filter: ?status=Paid&page=1&pageSize=25)
+GET    /api/invoices/stats        — dashboard KPIs (?from=<iso>&to=<iso>)
 GET    /api/invoices/{id}         — get single invoice
 PATCH  /api/invoices/{id}/status  — update status
 GET    /api/invoices/{id}/pdf     — download as PDF
@@ -122,13 +123,26 @@ Content-Type: application/json
 
 ---
 
+## Demo
+
+A demo user is seeded automatically on the first startup when `Seed:Enabled=true` (default in Production):
+
+| | |
+|---|---|
+| **Email** | `demo@invoiceflow.app` |
+| **Password** | `DemoPass123!` |
+
+The demo account includes 15 invoices across 6 recipients, various statuses (Draft, Sent, Paid, Overdue), and 11 months of history — enough to make the dashboard stats meaningful.
+
+---
+
 ## Running tests
 
 ```bash
 dotnet test
 ```
 
-8 unit tests covering service logic, total calculations, number generation, and error cases.
+34 unit tests covering service logic, totals, number generation, user isolation, stats aggregation, and auth flows.
 
 ---
 

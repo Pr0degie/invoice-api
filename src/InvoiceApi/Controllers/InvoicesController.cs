@@ -1,9 +1,11 @@
 using InvoiceApi.Data;
 using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
+using InvoiceApi.Models.Dtos.Stats;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace InvoiceApi.Controllers;
@@ -12,12 +14,41 @@ namespace InvoiceApi.Controllers;
 [Route("api/invoices")]
 [Produces("application/json")]
 [Authorize]
+[EnableRateLimiting("api-user")]
 public class InvoicesController(
     IInvoiceService invoices,
     IPdfService pdf,
+    IStatsService stats,
     AppDbContext db,
     ICurrentUserService currentUser) : ControllerBase
 {
+    /// <summary>Dashboard statistics for the authenticated user.</summary>
+    /// <remarks>
+    /// Defaults: from = today − 1 year, to = today. Capped to a maximum 5-year window.
+    /// Outstanding = Sent + Overdue (by IssueDate). Paid is filtered by PaidAt. Draft by CreatedAt.
+    /// </remarks>
+    [HttpGet("stats")]
+    [ProducesResponseType<StatsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> GetStats(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        CancellationToken ct)
+    {
+        var toDate = DateOnly.FromDateTime((to ?? DateTime.UtcNow).ToUniversalTime());
+        var fromDate = DateOnly.FromDateTime((from ?? DateTime.UtcNow.AddYears(-1)).ToUniversalTime());
+
+        if (fromDate > toDate)
+            return BadRequest(new { error = "'from' must be before or equal to 'to'." });
+
+        // Cap to 5 years to prevent runaway scans
+        var floor = toDate.AddYears(-5);
+        if (fromDate < floor) fromDate = floor;
+
+        var result = await stats.GetStatsAsync(currentUser.CurrentUserId, fromDate, toDate, ct);
+        return Ok(result);
+    }
+
     /// <summary>Create a new invoice.</summary>
     [HttpPost]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status201Created)]

@@ -29,6 +29,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .HasForeignKey(x => x.UserId)
              .OnDelete(DeleteBehavior.Cascade);
 
+            e.Property(x => x.TotalAmount).HasPrecision(18, 2);
+
+            // composite index for stats queries (UserId always first)
+            e.HasIndex(x => new { x.UserId, x.Status, x.IssueDate })
+             .HasDatabaseName("IX_Invoices_UserId_Status_IssueDate");
+
             // don't store computed columns
             e.Ignore(x => x.Subtotal);
             e.Ignore(x => x.TaxAmount);

@@ -22,6 +22,13 @@ public class Invoice
 
     public InvoiceStatus Status { get; set; } = InvoiceStatus.Draft;
 
+    // Stored snapshot of Total (Subtotal + TaxAmount) — kept in sync by InvoiceService.
+    // Needed for stats aggregate queries because the computed Total property is EF-ignored.
+    public decimal TotalAmount { get; set; }
+
+    // Set when Status transitions to Paid; cleared on any other status.
+    public DateOnly? PaidAt { get; set; }
+
     public Guid UserId { get; set; }
     public User User { get; set; } = null!;
 

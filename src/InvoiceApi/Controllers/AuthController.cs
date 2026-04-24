@@ -5,6 +5,7 @@ using InvoiceApi.Models.Dtos;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace InvoiceApi.Controllers;
 
@@ -15,6 +16,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
 {
     /// <summary>Register a new user.</summary>
     [HttpPost("register")]
+    [EnableRateLimiting("auth-ip")]
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -33,6 +35,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
 
     /// <summary>Log in and receive tokens.</summary>
     [HttpPost("login")]
+    [EnableRateLimiting("auth-ip")]
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginDto dto, CancellationToken ct)
