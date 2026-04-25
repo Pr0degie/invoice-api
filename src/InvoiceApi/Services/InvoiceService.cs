@@ -127,19 +127,24 @@ internal static class InvoiceMappings
     public static InvoiceResponse ToResponse(this Invoice i) => new(
         i.Id,
         i.Number,
+        i.Status,
         i.SenderName,
+        i.SenderAddress,
         i.RecipientName,
+        i.RecipientAddress,
         i.IssueDate,
         i.DueDate,
+        i.PaidAt,
+        i.Currency,
+        i.TaxRate,
         i.Subtotal,
         i.TaxAmount,
         i.Total,
-        i.Currency,
-        i.Status,
         i.LineItems.Select(li => new LineItemResponse(
             li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total
         )).ToList(),
         i.Notes,
-        i.CreatedAt
+        i.CreatedAt,
+        i.UpdatedAt
     );
 }

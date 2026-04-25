@@ -52,18 +52,23 @@ public record UpdateStatusRequest
 public record InvoiceResponse(
     Guid Id,
     string Number,
+    InvoiceStatus Status,
     string SenderName,
+    string SenderAddress,
     string RecipientName,
+    string RecipientAddress,
     DateOnly IssueDate,
     DateOnly DueDate,
+    DateOnly? PaidAt,
+    string Currency,
+    decimal TaxRate,
     decimal Subtotal,
     decimal TaxAmount,
     decimal Total,
-    string Currency,
-    InvoiceStatus Status,
     List<LineItemResponse> LineItems,
     string? Notes,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt
 );
 
 public record LineItemResponse(

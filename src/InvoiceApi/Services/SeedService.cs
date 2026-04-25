@@ -23,7 +23,7 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, ILogger<SeedSe
             PasswordHash = hasher.Hash(DemoPassword),
             Name = "Demo User",
             DefaultSenderName = "Demo User",
-            DefaultSenderAddress = "Musterstraße 1, 80331 München",
+            DefaultSenderAddress = "Musterstraße 42\n80331 München\nDeutschland",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -41,6 +41,20 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, ILogger<SeedSe
     {
         var counter = 1;
         var year = today.Year;
+
+        const string senderAddress = "Musterstraße 42\n80331 München\nDeutschland";
+
+        // One canonical address per recipient — consistent across all invoices
+        var recipientAddresses = new Dictionary<string, string>
+        {
+            ["TechStart GmbH"]       = "Leopoldstraße 1\n80802 München\nDeutschland",
+            ["Steinberg & Partner"]  = "Marienplatz 1\n80331 München\nDeutschland",
+            ["Media Design AG"]      = "Sendlinger Str. 7\n80331 München\nDeutschland",
+            ["Freelance Hub e.V."]   = "Rosenthaler Str. 40\n10178 Berlin\nDeutschland",
+            ["Müller Consulting GmbH"] = "Friedrichstraße 60\n10117 Berlin\nDeutschland",
+            ["Nextwave Digital"]     = "Unter den Linden 10\n10117 Berlin\nDeutschland",
+            ["Kranich Software AG"]  = "Am Hauptbahnhof 2\n60329 Frankfurt am Main\nDeutschland",
+        };
 
         Invoice Make(
             int monthsAgo,
@@ -70,9 +84,9 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, ILogger<SeedSe
                 UserId = userId,
                 Number = $"INV-{year}-{counter++:D4}",
                 SenderName = "Demo User",
-                SenderAddress = "Musterstraße 1, 80331 München",
+                SenderAddress = senderAddress,
                 RecipientName = recipient,
-                RecipientAddress = "Testweg 5, 10115 Berlin",
+                RecipientAddress = recipientAddresses[recipient],
                 IssueDate = issue,
                 DueDate = issue.AddDays(dueDays),
                 TaxRate = taxRate,

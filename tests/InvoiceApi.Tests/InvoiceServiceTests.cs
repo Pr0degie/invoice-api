@@ -153,6 +153,33 @@ public class InvoiceServiceTests : IDisposable
         await act.Should().ThrowAsync<NotFoundException>();
     }
 
+    [Fact]
+    public async Task GetAsync_ReturnsStatusAsString()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+
+        var result = await _sut.GetAsync(created.Id);
+
+        var opts = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        opts.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        var json = System.Text.Json.JsonSerializer.Serialize(result, opts);
+
+        json.Should().Contain("\"status\":\"Paid\"");
+        json.Should().NotMatchRegex("\"status\":\\d");
+    }
+
+    [Fact]
+    public async Task GetAsync_IncludesSenderAndRecipientAddress()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+
+        var result = await _sut.GetAsync(created.Id);
+
+        result.SenderAddress.Should().NotBeNullOrWhiteSpace();
+        result.RecipientAddress.Should().NotBeNullOrWhiteSpace();
+    }
+
     // ---
 
     private static CreateInvoiceRequest BuildRequest() => new()
