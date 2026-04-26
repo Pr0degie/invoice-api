@@ -33,7 +33,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         var invoice = new Invoice
         {
             UserId = userId,
-            Number = await GenerateNumberAsync(ct),
+            Number = await GenerateNumberAsync(userId, ct),
             SenderName = req.SenderName,
             SenderAddress = req.SenderAddress,
             RecipientName = req.RecipientName,
@@ -114,11 +114,22 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
 
     // ---
 
-    private async Task<string> GenerateNumberAsync(CancellationToken ct)
+    private async Task<string> GenerateNumberAsync(Guid userId, CancellationToken ct)
     {
         var year = DateTime.UtcNow.Year;
-        var count = await db.Invoices.CountAsync(i => i.IssueDate.Year == year, ct);
-        return $"INV-{year}-{(count + 1):D4}";
+        var prefix = $"INV-{year}-";
+
+        var maxNumber = await db.Invoices
+            .Where(i => i.UserId == userId && i.Number.StartsWith(prefix))
+            .OrderByDescending(i => i.Number)
+            .Select(i => i.Number)
+            .FirstOrDefaultAsync(ct);
+
+        var next = maxNumber is null
+            ? 1
+            : int.Parse(maxNumber.Substring(prefix.Length)) + 1;
+
+        return $"{prefix}{next:D4}";
     }
 }
 

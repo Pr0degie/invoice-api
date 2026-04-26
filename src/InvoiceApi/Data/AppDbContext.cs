@@ -16,7 +16,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             e.HasKey(x => x.Id);
             e.Property(x => x.Number).IsRequired().HasMaxLength(50);
-            e.HasIndex(x => x.Number).IsUnique();
+            e.HasIndex(x => new { x.UserId, x.Number }).IsUnique()
+             .HasDatabaseName("IX_Invoices_UserId_Number");
             e.Property(x => x.Currency).HasMaxLength(3);
             e.Property(x => x.TaxRate).HasPrecision(5, 4);
             e.HasMany(x => x.LineItems)
