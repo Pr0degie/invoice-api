@@ -82,10 +82,11 @@ public class InvoicesController(
         [FromQuery] InvoiceStatus? status,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25,
+        [FromQuery] string? search = null,
         CancellationToken ct = default)
     {
         pageSize = Math.Clamp(pageSize, 1, 100);
-        return Ok(await invoices.ListAsync(status, page, pageSize, ct));
+        return Ok(await invoices.ListAsync(status, page, pageSize, search, ct));
     }
 
     /// <summary>Update the status of an invoice (e.g. mark as Paid).</summary>

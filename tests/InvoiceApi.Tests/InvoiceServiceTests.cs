@@ -182,6 +182,45 @@ public class InvoiceServiceTests : IDisposable
 
     // ---
 
+    [Fact]
+    public async Task ListAsync_ShouldFilterBySearch_OnRecipientName()
+    {
+        await _sut.CreateAsync(BuildRequest() with { RecipientName = "Müller GmbH" });
+        await _sut.CreateAsync(BuildRequest() with { RecipientName = "Müller Consulting GmbH" });
+        await _sut.CreateAsync(BuildRequest() with { RecipientName = "ACME Corp" });
+
+        var result = await _sut.ListAsync(null, 1, 100, search: "Müller");
+
+        result.Should().HaveCount(2);
+        result.Should().AllSatisfy(i => i.RecipientName.Should().Contain("Müller"));
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldFilterBySearch_OnInvoiceNumber()
+    {
+        await _sut.CreateAsync(BuildRequest()); // INV-YYYY-0001
+        await _sut.CreateAsync(BuildRequest()); // INV-YYYY-0002
+        await _sut.CreateAsync(BuildRequest()); // INV-YYYY-0003
+
+        var year = DateTime.UtcNow.Year;
+        var result = await _sut.ListAsync(null, 1, 100, search: $"{year}-0002");
+
+        result.Should().HaveCount(1);
+        result[0].Number.Should().Be($"INV-{year}-0002");
+    }
+
+    [Fact]
+    public async Task ListAsync_SearchShouldBeCaseInsensitive()
+    {
+        await _sut.CreateAsync(BuildRequest() with { RecipientName = "Müller GmbH" });
+        await _sut.CreateAsync(BuildRequest() with { RecipientName = "ACME Corp" });
+
+        var result = await _sut.ListAsync(null, 1, 100, search: "müller");
+
+        result.Should().HaveCount(1);
+        result[0].RecipientName.Should().Be("Müller GmbH");
+    }
+
     private static CreateInvoiceRequest BuildRequest() => new()
     {
         SenderName = "Tobias Dev",

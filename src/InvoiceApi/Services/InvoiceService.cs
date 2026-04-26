@@ -9,7 +9,7 @@ public interface IInvoiceService
 {
     Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> GetAsync(Guid id, CancellationToken ct = default);
-    Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, CancellationToken ct = default);
+    Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, string? search = null, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
@@ -65,13 +65,21 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         return invoice.ToResponse();
     }
 
-    public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, CancellationToken ct = default)
+    public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, string? search = null, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
         var query = db.Invoices.Include(i => i.LineItems).Where(i => i.UserId == userId);
 
         if (status.HasValue)
             query = query.Where(i => i.Status == status.Value);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLower();
+            query = query.Where(i =>
+                i.Number.ToLower().Contains(term) ||
+                i.RecipientName.ToLower().Contains(term));
+        }
 
         return await query
             .OrderByDescending(i => i.CreatedAt)
