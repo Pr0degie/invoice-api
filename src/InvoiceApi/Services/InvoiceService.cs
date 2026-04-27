@@ -10,6 +10,7 @@ public interface IInvoiceService
     Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> GetAsync(Guid id, CancellationToken ct = default);
     Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, string? search = null, CancellationToken ct = default);
+    Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
@@ -89,6 +90,52 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             .ToListAsync(ct);
     }
 
+    public async Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest req, CancellationToken ct = default)
+    {
+        var userId = currentUser.CurrentUserId;
+
+        // Load without Include to avoid navigation-collection proxy conflicts with InMemory provider.
+        var invoice = await db.Invoices
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
+            ?? throw new NotFoundException($"Invoice {id} not found.");
+
+        if (invoice.Status != InvoiceStatus.Draft)
+            throw new ConflictException("Only draft invoices can be edited.");
+
+        invoice.SenderName = req.SenderName;
+        invoice.SenderAddress = req.SenderAddress;
+        invoice.RecipientName = req.RecipientName;
+        invoice.RecipientAddress = req.RecipientAddress;
+        invoice.IssueDate = req.IssueDate ?? invoice.IssueDate;
+        invoice.DueDate = req.DueDate ?? invoice.DueDate;
+        invoice.Currency = req.Currency.ToUpperInvariant();
+        invoice.TaxRate = req.TaxRate;
+        invoice.Notes = req.Notes;
+        invoice.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // Replace line items via DbSet to avoid navigation-collection proxy conflicts.
+        var old = await db.LineItems.Where(li => li.InvoiceId == id).ToListAsync(ct);
+        db.LineItems.RemoveRange(old);
+
+        var newItems = req.LineItems.Select(li => new LineItem
+        {
+            InvoiceId = id,
+            Description = li.Description,
+            Quantity = li.Quantity,
+            Unit = li.Unit,
+            UnitPrice = li.UnitPrice
+        }).ToList();
+        db.LineItems.AddRange(newItems);
+
+        var subtotal = newItems.Sum(li => li.Total);
+        invoice.TotalAmount = subtotal + Math.Round(subtotal * invoice.TaxRate, 2);
+
+        await db.SaveChangesAsync(ct);
+
+        invoice.LineItems = newItems;
+        return invoice.ToResponse();
+    }
+
     public async Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
@@ -115,6 +162,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         var invoice = await db.Invoices
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
+
+        if (invoice.Status != InvoiceStatus.Draft)
+            throw new ConflictException("Only draft invoices can be deleted.");
 
         db.Invoices.Remove(invoice);
         await db.SaveChangesAsync(ct);

@@ -143,6 +143,17 @@ public class InvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldThrow_WhenStatusNotDraft()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
+
+        var act = () => _sut.DeleteAsync(created.Id);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
     public async Task DeleteAsync_ShouldThrow_WhenDeletingOtherUsersInvoice()
     {
         var invoice = await _sut.CreateAsync(BuildRequest());
@@ -220,6 +231,89 @@ public class InvoiceServiceTests : IDisposable
         result.Should().HaveCount(1);
         result[0].RecipientName.Should().Be("Müller GmbH");
     }
+
+    // --- UpdateAsync ---
+
+    [Fact]
+    public async Task UpdateAsync_ShouldUpdateDraftInvoice()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+
+        var updated = await _sut.UpdateAsync(created.Id, BuildRequest() with { RecipientName = "New Recipient" });
+
+        updated.RecipientName.Should().Be("New Recipient");
+        updated.Id.Should().Be(created.Id);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldReplaceLineItems()
+    {
+        var created = await _sut.CreateAsync(BuildRequest()); // 2 line items
+
+        var updated = await _sut.UpdateAsync(created.Id, BuildRequest() with
+        {
+            LineItems = [new() { Description = "Single Item", Quantity = 1, UnitPrice = 100m, Unit = "flat" }]
+        });
+
+        updated.LineItems.Should().HaveCount(1);
+        updated.LineItems[0].Description.Should().Be("Single Item");
+
+        var dbLineItems = await _db.LineItems.Where(li => li.InvoiceId == created.Id).ToListAsync();
+        dbLineItems.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRecomputeTotals()
+    {
+        var created = await _sut.CreateAsync(BuildRequest()); // subtotal 210, tax 39.90, total 249.90
+
+        var updated = await _sut.UpdateAsync(created.Id, BuildRequest() with
+        {
+            TaxRate = 0.07m,
+            LineItems = [new() { Description = "Item", Quantity = 1, UnitPrice = 200m, Unit = "flat" }]
+        });
+
+        updated.Subtotal.Should().Be(200m);
+        updated.TaxAmount.Should().Be(14m);  // 200 * 0.07
+        updated.Total.Should().Be(214m);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldThrow_WhenStatusNotDraft()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
+
+        var act = () => _sut.UpdateAsync(created.Id, BuildRequest());
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldThrow_WhenInvoiceBelongsToOtherUser()
+    {
+        var invoice = await _sut.CreateAsync(BuildRequest());
+
+        var userBService = new InvoiceService(_db, new FakeCurrentUserService(Guid.NewGuid()));
+        var act = () => userBService.UpdateAsync(invoice.Id, BuildRequest());
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldNotChangeNumberOrCreatedAt()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        var originalCreatedAt = created.CreatedAt;
+
+        var updated = await _sut.UpdateAsync(created.Id, BuildRequest() with { RecipientName = "Changed" });
+
+        updated.Number.Should().Be(created.Number);
+        updated.CreatedAt.Should().Be(originalCreatedAt);
+        updated.UpdatedAt.Should().BeAfter(originalCreatedAt);
+    }
+
+    // ---
 
     private static CreateInvoiceRequest BuildRequest() => new()
     {

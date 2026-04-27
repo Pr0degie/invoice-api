@@ -89,6 +89,27 @@ public class InvoicesController(
         return Ok(await invoices.ListAsync(status, page, pageSize, search, ct));
     }
 
+    /// <summary>Update a draft invoice.</summary>
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Update(Guid id, [FromBody] CreateInvoiceRequest request, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await invoices.UpdateAsync(id, request, ct));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+        catch (ConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
     /// <summary>Update the status of an invoice (e.g. mark as Paid).</summary>
     [HttpPatch("{id:guid}/status")]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
@@ -128,6 +149,7 @@ public class InvoicesController(
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         try
@@ -138,6 +160,10 @@ public class InvoicesController(
         catch (NotFoundException ex)
         {
             return NotFound(new { error = ex.Message });
+        }
+        catch (ConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
     }
 }
