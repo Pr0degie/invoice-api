@@ -90,6 +90,80 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         if (user is null)
             return Unauthorized();
 
-        return Ok(new UserDto(user.Id, user.Email, user.Name, user.CreatedAt));
+        return Ok(new UserDto(user.Id, user.Email, user.Name, user.CreatedAt,
+            user.DefaultSenderName, user.DefaultSenderAddress));
+    }
+
+    /// <summary>Update name and/or sender defaults for the current user.</summary>
+    [HttpPatch("me")]
+    [Authorize]
+    [ProducesResponseType<UserDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> UpdateMe([FromBody] UpdateProfileDto dto, CancellationToken ct)
+    {
+        var sub = User.FindFirstValue("sub");
+        if (sub is null || !Guid.TryParse(sub, out var userId))
+            return Unauthorized();
+
+        try
+        {
+            var result = await authService.UpdateProfileAsync(userId, dto, ct);
+            return Ok(result);
+        }
+        catch (NotFoundException)
+        {
+            return Unauthorized();
+        }
+    }
+
+    /// <summary>Change the current user's password. Revokes all existing refresh tokens.</summary>
+    [HttpPost("change-password")]
+    [Authorize]
+    [EnableRateLimiting("auth-ip")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto dto, CancellationToken ct)
+    {
+        var sub = User.FindFirstValue("sub");
+        if (sub is null || !Guid.TryParse(sub, out var userId))
+            return Unauthorized();
+
+        try
+        {
+            await authService.ChangePasswordAsync(userId, dto, ct);
+            return NoContent();
+        }
+        catch (ValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotFoundException)
+        {
+            return Unauthorized();
+        }
+    }
+
+    /// <summary>Delete the current user's account. Cascades to invoices and refresh tokens.</summary>
+    [HttpDelete("me")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> DeleteMe(CancellationToken ct)
+    {
+        var sub = User.FindFirstValue("sub");
+        if (sub is null || !Guid.TryParse(sub, out var userId))
+            return Unauthorized();
+
+        try
+        {
+            await authService.DeleteAccountAsync(userId, ct);
+            return NoContent();
+        }
+        catch (NotFoundException)
+        {
+            return Unauthorized();
+        }
     }
 }

@@ -57,6 +57,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => x.Email).IsUnique();
             e.Property(x => x.Name).IsRequired().HasMaxLength(200);
             e.Property(x => x.PasswordHash).IsRequired();
+            e.Property(x => x.DefaultSenderName).HasMaxLength(200);
+            e.Property(x => x.DefaultSenderAddress).HasMaxLength(200);
         });
 
         b.Entity<RefreshToken>(e =>

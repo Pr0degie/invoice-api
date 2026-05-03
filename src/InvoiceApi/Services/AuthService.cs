@@ -12,6 +12,9 @@ public interface IAuthService
     Task<AuthResponseDto> LoginAsync(LoginDto dto, CancellationToken ct = default);
     Task<AuthResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default);
     Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken ct = default);
+    Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default);
+    Task ChangePasswordAsync(Guid userId, ChangePasswordDto dto, CancellationToken ct = default);
+    Task DeleteAccountAsync(Guid userId, CancellationToken ct = default);
 }
 
 public class AuthService(
@@ -104,6 +107,57 @@ public class AuthService(
         };
     }
 
+    public async Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default)
+    {
+        var user = await db.Users.FindAsync([userId], ct)
+            ?? throw new NotFoundException("User not found.");
+
+        if (dto.Name is not null)
+            user.Name = dto.Name == "" ? throw new ValidationException("Name cannot be empty.") : dto.Name.Trim();
+
+        if (dto.DefaultSenderName is not null)
+            user.DefaultSenderName = dto.DefaultSenderName == "" ? null : dto.DefaultSenderName.Trim();
+
+        if (dto.DefaultSenderAddress is not null)
+            user.DefaultSenderAddress = dto.DefaultSenderAddress == "" ? null : dto.DefaultSenderAddress.Trim();
+
+        user.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return ToUserDto(user);
+    }
+
+    public async Task ChangePasswordAsync(Guid userId, ChangePasswordDto dto, CancellationToken ct = default)
+    {
+        var user = await db.Users.FindAsync([userId], ct)
+            ?? throw new NotFoundException("User not found.");
+
+        if (!passwordHasher.Verify(dto.CurrentPassword, user.PasswordHash))
+            throw new ValidationException("invalid_current_password");
+
+        user.PasswordHash = passwordHasher.Hash(dto.NewPassword);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        var activeTokens = await db.RefreshTokens
+            .Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ToListAsync(ct);
+
+        var now = DateTime.UtcNow;
+        foreach (var t in activeTokens)
+            t.RevokedAt = now;
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task DeleteAccountAsync(Guid userId, CancellationToken ct = default)
+    {
+        var user = await db.Users.FindAsync([userId], ct)
+            ?? throw new NotFoundException("User not found.");
+
+        db.Users.Remove(user);
+        await db.SaveChangesAsync(ct);
+    }
+
     private AuthResponseDto BuildAuthResponse(User user, string refreshToken)
     {
         var minutes = config.GetValue("Jwt:AccessTokenMinutes", 15);
@@ -112,7 +166,10 @@ public class AuthService(
             accessToken,
             refreshToken,
             DateTime.UtcNow.AddMinutes(minutes),
-            new UserDto(user.Id, user.Email, user.Name, user.CreatedAt)
+            ToUserDto(user)
         );
     }
+
+    private static UserDto ToUserDto(User user) =>
+        new(user.Id, user.Email, user.Name, user.CreatedAt, user.DefaultSenderName, user.DefaultSenderAddress);
 }

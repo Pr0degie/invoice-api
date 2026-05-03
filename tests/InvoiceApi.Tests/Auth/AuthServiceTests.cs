@@ -1,6 +1,7 @@
 using FluentAssertions;
 using InvoiceApi.Data;
 using InvoiceApi.Exceptions;
+using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos;
 using InvoiceApi.Services;
 using Microsoft.EntityFrameworkCore;
@@ -131,6 +132,160 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.RefreshAsync("totally-invalid-token");
 
         await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task ChangePassword_WithCorrectCurrent_UpdatesHashAndRevokesRefreshTokens()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("chpw@example.com", "oldpassword", "User"));
+        var oldRefreshToken = registered.RefreshToken;
+        var userId = registered.User.Id;
+
+        await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        var user = await _db.Users.FindAsync(userId);
+        new BCryptPasswordHasher().Verify("newpassword123", user!.PasswordHash).Should().BeTrue();
+
+        var token = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == oldRefreshToken);
+        token!.RevokedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ChangePassword_WithWrongCurrent_ThrowsValidationException_AndLeavesDbUnchanged()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("chpw2@example.com", "correctpass", "User"));
+        var userId = registered.User.Id;
+        var originalHash = (await _db.Users.FindAsync(userId))!.PasswordHash;
+
+        var act = () => _sut.ChangePasswordAsync(userId, new ChangePasswordDto("wrongpass", "newpassword123"));
+
+        await act.Should().ThrowAsync<ValidationException>()
+            .WithMessage("invalid_current_password");
+
+        var user = await _db.Users.FindAsync(userId);
+        user!.PasswordHash.Should().Be(originalHash);
+    }
+
+    [Fact]
+    public async Task ChangePassword_NonExistentUser_ThrowsNotFoundException()
+    {
+        var act = () => _sut.ChangePasswordAsync(Guid.NewGuid(), new ChangePasswordDto("any", "newpassword123"));
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task ChangePassword_OldPasswordLoginFails_NewPasswordLoginSucceeds()
+    {
+        await _sut.RegisterAsync(new RegisterDto("chpw3@example.com", "oldpassword", "User"));
+        var userId = (await _db.Users.FirstAsync(u => u.Email == "chpw3@example.com")).Id;
+
+        await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        var failAct = () => _sut.LoginAsync(new LoginDto("chpw3@example.com", "oldpassword"));
+        await failAct.Should().ThrowAsync<UnauthorizedException>();
+
+        var result = await _sut.LoginAsync(new LoginDto("chpw3@example.com", "newpassword123"));
+        result.Token.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task ChangePassword_PreChangeRefreshToken_IsRevoked()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("chpw4@example.com", "oldpassword", "User"));
+        var preChangeRefreshToken = registered.RefreshToken;
+        var userId = registered.User.Id;
+
+        await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        var act = () => _sut.RefreshAsync(preChangeRefreshToken);
+        await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task UpdateProfile_ShouldChangeOnlyProvidedFields()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("profile@example.com", "password123", "Original Name"));
+        var userId = registered.User.Id;
+
+        var result = await _sut.UpdateProfileAsync(userId, new UpdateProfileDto("New Name", null, null));
+
+        result.Name.Should().Be("New Name");
+        result.DefaultSenderName.Should().BeNull();
+        result.DefaultSenderAddress.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateProfile_ShouldClearWhenEmptyString()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("clear@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+
+        await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "Tobias", "123 Street"));
+        var result = await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "", null));
+
+        result.DefaultSenderName.Should().BeNull();
+        result.DefaultSenderAddress.Should().Be("123 Street");
+    }
+
+    [Fact]
+    public async Task UpdateProfile_ShouldUpdateUpdatedAt()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("updated@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        var before = DateTime.UtcNow;
+
+        await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "Tobias", null));
+
+        var user = await _db.Users.FindAsync(userId);
+        user!.UpdatedAt.Should().BeOnOrAfter(before);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_NonExistentUser_ShouldThrowNotFoundException()
+    {
+        var act = () => _sut.UpdateProfileAsync(Guid.NewGuid(), new UpdateProfileDto("Name", null, null));
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_RemovesUserAndCascadesInvoicesAndRefreshTokens()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("delete@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+
+        var invoice = new Invoice
+        {
+            UserId = userId,
+            Number = "INV-2026-0001",
+            SenderName = "Sender",
+            SenderAddress = "Addr",
+            RecipientName = "Recipient",
+            RecipientAddress = "Addr",
+            IssueDate = DateOnly.FromDateTime(DateTime.Today),
+            DueDate = DateOnly.FromDateTime(DateTime.Today.AddDays(30)),
+            LineItems = [new LineItem { Description = "Work", Quantity = 1, UnitPrice = 100m }]
+        };
+        _db.Invoices.Add(invoice);
+        await _db.SaveChangesAsync();
+        var invoiceId = invoice.Id;
+        var lineItemId = invoice.LineItems[0].Id;
+
+        await _sut.DeleteAccountAsync(userId);
+
+        (await _db.Users.CountAsync(u => u.Id == userId)).Should().Be(0);
+        (await _db.Invoices.CountAsync(i => i.UserId == userId)).Should().Be(0);
+        (await _db.LineItems.CountAsync(li => li.InvoiceId == invoiceId)).Should().Be(0);
+        (await _db.RefreshTokens.CountAsync(t => t.UserId == userId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DeleteAccount_NonExistent_ThrowsNotFound()
+    {
+        var act = () => _sut.DeleteAccountAsync(Guid.NewGuid());
+
+        await act.Should().ThrowAsync<NotFoundException>();
     }
 
     // ---
