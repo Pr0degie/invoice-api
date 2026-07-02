@@ -35,9 +35,10 @@ builder.Services.AddScoped<IStatsService, StatsService>();
 builder.Services.AddScoped<IPdfService, PdfService>();
 builder.Services.AddScoped<SeedService>();
 
-// JWT auth
+// JWT auth — key presence/strength is validated at startup below; no fallback here
 var jwtSection = builder.Configuration.GetSection("Jwt");
-var signingKey = builder.Configuration["Jwt:SigningKey"] ?? string.Empty;
+var signingKey = builder.Configuration["Jwt:SigningKey"]
+    ?? throw new InvalidOperationException("Jwt:SigningKey is not configured.");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opts =>
@@ -51,8 +52,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtSection["Issuer"],
             ValidAudience = jwtSection["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(signingKey.Length > 0 ? signingKey : new string('x', 32))),
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
             ClockSkew = TimeSpan.Zero
         };
     });
