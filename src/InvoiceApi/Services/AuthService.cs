@@ -42,12 +42,12 @@ public class AuthService(
 
         db.Users.Add(user);
 
-        var refreshToken = CreateRefreshToken(user.Id);
+        var (refreshToken, rawToken) = CreateRefreshToken(user.Id);
         db.RefreshTokens.Add(refreshToken);
 
         await db.SaveChangesAsync(ct);
 
-        return BuildAuthResponse(user, refreshToken.Token);
+        return BuildAuthResponse(user, rawToken);
     }
 
     public async Task<AuthResponseDto> LoginAsync(LoginDto dto, CancellationToken ct = default)
@@ -58,35 +58,44 @@ public class AuthService(
         if (user is null || !passwordHasher.Verify(dto.Password, user.PasswordHash))
             throw new UnauthorizedException("Invalid credentials.");
 
-        var refreshToken = CreateRefreshToken(user.Id);
+        // Housekeeping: drop this user's expired refresh tokens
+        var now = DateTime.UtcNow;
+        var expiredTokens = await db.RefreshTokens
+            .Where(t => t.UserId == user.Id && t.ExpiresAt < now)
+            .ToListAsync(ct);
+        db.RefreshTokens.RemoveRange(expiredTokens);
+
+        var (refreshToken, rawToken) = CreateRefreshToken(user.Id);
         db.RefreshTokens.Add(refreshToken);
         await db.SaveChangesAsync(ct);
 
-        return BuildAuthResponse(user, refreshToken.Token);
+        return BuildAuthResponse(user, rawToken);
     }
 
     public async Task<AuthResponseDto> RefreshAsync(string refreshToken, CancellationToken ct = default)
     {
+        var tokenHash = RefreshTokenHasher.Hash(refreshToken);
         var token = await db.RefreshTokens
             .Include(t => t.User)
-            .FirstOrDefaultAsync(t => t.Token == refreshToken, ct);
+            .FirstOrDefaultAsync(t => t.Token == tokenHash, ct);
 
         if (token is null || token.IsRevoked || token.ExpiresAt < DateTime.UtcNow)
             throw new UnauthorizedException("Invalid or expired refresh token.");
 
         token.RevokedAt = DateTime.UtcNow;
 
-        var newRefreshToken = CreateRefreshToken(token.UserId);
+        var (newRefreshToken, rawToken) = CreateRefreshToken(token.UserId);
         db.RefreshTokens.Add(newRefreshToken);
 
         await db.SaveChangesAsync(ct);
 
-        return BuildAuthResponse(token.User, newRefreshToken.Token);
+        return BuildAuthResponse(token.User, rawToken);
     }
 
     public async Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken ct = default)
     {
-        var token = await db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == refreshToken, ct);
+        var tokenHash = RefreshTokenHasher.Hash(refreshToken);
+        var token = await db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == tokenHash, ct);
         if (token is not null && !token.IsRevoked)
         {
             token.RevokedAt = DateTime.UtcNow;
@@ -94,17 +103,19 @@ public class AuthService(
         }
     }
 
-    private RefreshToken CreateRefreshToken(Guid userId)
+    private (RefreshToken entity, string rawToken) CreateRefreshToken(Guid userId)
     {
         var days = config.GetValue("Jwt:RefreshTokenDays", 30);
-        return new RefreshToken
+        var rawToken = jwtTokenService.GenerateRefreshToken();
+        var entity = new RefreshToken
         {
             Id = Guid.NewGuid(),
-            Token = jwtTokenService.GenerateRefreshToken(),
+            Token = RefreshTokenHasher.Hash(rawToken),
             UserId = userId,
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.AddDays(days)
         };
+        return (entity, rawToken);
     }
 
     public async Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default)

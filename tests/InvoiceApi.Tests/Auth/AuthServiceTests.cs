@@ -109,8 +109,43 @@ public class AuthServiceTests : IDisposable
         refreshed.Token.Should().NotBeNullOrEmpty();
         refreshed.RefreshToken.Should().NotBe(oldRefreshToken);
 
-        var oldToken = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == oldRefreshToken);
+        var oldToken = await _db.RefreshTokens
+            .FirstOrDefaultAsync(t => t.Token == RefreshTokenHasher.Hash(oldRefreshToken));
         oldToken!.IsRevoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Register_ShouldStoreRefreshTokenHashed_NotRaw()
+    {
+        var result = await _sut.RegisterAsync(new RegisterDto("hashed@example.com", "password123", "User"));
+
+        (await _db.RefreshTokens.AnyAsync(t => t.Token == result.RefreshToken)).Should().BeFalse();
+        (await _db.RefreshTokens.AnyAsync(t => t.Token == RefreshTokenHasher.Hash(result.RefreshToken)))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Login_ShouldDeleteExpiredRefreshTokens()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("expired@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+
+        _db.RefreshTokens.Add(new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            Token = RefreshTokenHasher.Hash("some-expired-token"),
+            UserId = userId,
+            CreatedAt = DateTime.UtcNow.AddDays(-60),
+            ExpiresAt = DateTime.UtcNow.AddDays(-30)
+        });
+        await _db.SaveChangesAsync();
+
+        await _sut.LoginAsync(new LoginDto("expired@example.com", "password123"));
+
+        (await _db.RefreshTokens.AnyAsync(t => t.UserId == userId && t.ExpiresAt < DateTime.UtcNow))
+            .Should().BeFalse();
+        // non-expired tokens survive: the register token + the new login token
+        (await _db.RefreshTokens.CountAsync(t => t.UserId == userId)).Should().Be(2);
     }
 
     [Fact]
@@ -146,7 +181,8 @@ public class AuthServiceTests : IDisposable
         var user = await _db.Users.FindAsync(userId);
         new BCryptPasswordHasher().Verify("newpassword123", user!.PasswordHash).Should().BeTrue();
 
-        var token = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == oldRefreshToken);
+        var token = await _db.RefreshTokens
+            .FirstOrDefaultAsync(t => t.Token == RefreshTokenHasher.Hash(oldRefreshToken));
         token!.RevokedAt.Should().NotBeNull();
     }
 
