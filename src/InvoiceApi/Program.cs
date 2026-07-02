@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using InvoiceApi.Data;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -57,6 +58,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddAuthorization();
+
+// Behind Railway's proxy the socket peer is the proxy, not the client.
+// Trust X-Forwarded-For/-Proto so RemoteIpAddress (used by rate-limit partitions) is the real client IP.
+builder.Services.Configure<ForwardedHeadersOptions>(opts =>
+{
+    opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Railway's proxy IPs aren't statically known — clear the loopback-only defaults.
+    opts.KnownNetworks.Clear();
+    opts.KnownProxies.Clear();
+});
 
 // Rate limiting — per-IP for auth, per-user for API
 builder.Services.AddRateLimiter(opts =>
@@ -158,6 +169,9 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// Must run before anything that reads the client IP (request logging, rate limiting)
+app.UseForwardedHeaders();
+
 app.UseSerilogRequestLogging();
 
 // Security headers — HSTS is handled at the edge (Railway / Cloudflare)
@@ -176,9 +190,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("InvoiceFlowFrontend");
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// After auth so the "api-user" policy can partition on ctx.User (sub claim)
+app.UseRateLimiter();
 app.MapControllers();
 app.MapGet("/health", async (AppDbContext db, CancellationToken ct) =>
 {
