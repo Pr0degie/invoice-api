@@ -52,6 +52,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
 
     /// <summary>Refresh an access token using a refresh token.</summary>
     [HttpPost("refresh")]
+    [EnableRateLimiting("auth-ip")]
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto dto, CancellationToken ct)
@@ -68,6 +69,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
 
     /// <summary>Revoke a refresh token (logout).</summary>
     [HttpPost("logout")]
+    [EnableRateLimiting("auth-ip")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout([FromBody] RefreshRequestDto dto, CancellationToken ct)
     {
