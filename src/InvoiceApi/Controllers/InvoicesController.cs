@@ -114,6 +114,7 @@ public class InvoicesController(
     [HttpPatch("{id:guid}/status")]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateStatusRequest request, CancellationToken ct)
     {
         try
@@ -123,6 +124,10 @@ public class InvoicesController(
         catch (NotFoundException ex)
         {
             return NotFound(new { error = ex.Message });
+        }
+        catch (ConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
     }
 

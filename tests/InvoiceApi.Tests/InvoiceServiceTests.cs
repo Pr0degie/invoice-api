@@ -78,6 +78,7 @@ public class InvoiceServiceTests : IDisposable
     public async Task UpdateStatusAsync_ShouldUpdateStatus()
     {
         var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
 
         var updated = await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
 
@@ -85,9 +86,62 @@ public class InvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateStatusAsync_ShouldThrowConflict_WhenTransitionNotAllowed()
+    {
+        // Paid → Draft is forbidden
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+
+        var act = () => _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Draft);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ShouldThrowConflict_WhenSkippingSent()
+    {
+        // Draft → Paid must go through Sent
+        var created = await _sut.CreateAsync(BuildRequest());
+
+        var act = () => _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ShouldPreservePaidAt_OnPaidOverduePaidRoundTrip()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
+        var paid = await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+
+        var overdue = await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Overdue);
+        var paidAgain = await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+
+        paid.PaidAt.Should().NotBeNull();
+        overdue.PaidAt.Should().Be(paid.PaidAt);
+        paidAgain.PaidAt.Should().Be(paid.PaidAt);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ShouldClearPaidAt_OnCancelled()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Overdue);
+
+        var cancelled = await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Cancelled);
+
+        cancelled.PaidAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ListAsync_ShouldFilterByStatus()
     {
         var inv = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(inv.Id, InvoiceStatus.Sent);
         await _sut.UpdateStatusAsync(inv.Id, InvoiceStatus.Paid);
         await _sut.CreateAsync(BuildRequest()); // Draft
 
@@ -168,6 +222,7 @@ public class InvoiceServiceTests : IDisposable
     public async Task GetAsync_ReturnsStatusAsString()
     {
         var created = await _sut.CreateAsync(BuildRequest());
+        await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Sent);
         await _sut.UpdateStatusAsync(created.Id, InvoiceStatus.Paid);
 
         var result = await _sut.GetAsync(created.Id);

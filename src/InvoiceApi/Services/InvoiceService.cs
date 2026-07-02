@@ -136,6 +136,18 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         return invoice.ToResponse();
     }
 
+    // Stopgap transition guard until the full workflow rework (Prompt 12 Part B).
+    // Paid→Overdue exists so a mistakenly-marked payment can be undone; the PaidAt
+    // round trip below keeps the original payment date.
+    private static readonly Dictionary<InvoiceStatus, InvoiceStatus[]> AllowedTransitions = new()
+    {
+        [InvoiceStatus.Draft] = [InvoiceStatus.Sent],
+        [InvoiceStatus.Sent] = [InvoiceStatus.Paid, InvoiceStatus.Overdue, InvoiceStatus.Cancelled],
+        [InvoiceStatus.Overdue] = [InvoiceStatus.Paid, InvoiceStatus.Cancelled],
+        [InvoiceStatus.Paid] = [InvoiceStatus.Overdue],
+        [InvoiceStatus.Cancelled] = [],
+    };
+
     public async Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
@@ -145,11 +157,17 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
+        if (!AllowedTransitions[invoice.Status].Contains(newStatus))
+            throw new ConflictException($"Cannot change status from {invoice.Status} to {newStatus}.");
+
         invoice.Status = newStatus;
         invoice.UpdatedAt = DateTimeOffset.UtcNow;
-        invoice.PaidAt = newStatus == InvoiceStatus.Paid
-            ? DateOnly.FromDateTime(DateTime.UtcNow)
-            : null;
+
+        if (newStatus == InvoiceStatus.Paid)
+            invoice.PaidAt ??= DateOnly.FromDateTime(DateTime.UtcNow);
+        else if (newStatus == InvoiceStatus.Cancelled)
+            invoice.PaidAt = null;
+        // Overdue keeps PaidAt so Paid→Overdue→Paid preserves the original date
 
         await db.SaveChangesAsync(ct);
         return invoice.ToResponse();
