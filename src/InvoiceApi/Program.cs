@@ -165,8 +165,13 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
 
+    // Demo seeding in Production is an explicit opt-in (Seed__Enabled=true on the demo instance only)
     if (app.Configuration.GetValue<bool>("Seed:Enabled"))
     {
+        if (app.Environment.IsProduction())
+            app.Logger.LogWarning("Seed:Enabled is true in Production — seeding demo data. " +
+                "This should only be the case on the demo instance.");
+
         var seeder = scope.ServiceProvider.GetRequiredService<SeedService>();
         await seeder.SeedAsync();
     }
