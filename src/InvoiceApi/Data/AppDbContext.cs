@@ -66,6 +66,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             e.Property(x => x.Token).IsRequired().HasMaxLength(256);
             e.HasIndex(x => x.Token).IsUnique();
+            e.Property(x => x.ReplacedByTokenHash).HasMaxLength(256);
             e.HasOne(x => x.User)
              .WithMany(u => u.RefreshTokens)
              .HasForeignKey(x => x.UserId)

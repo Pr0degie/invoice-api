@@ -24,6 +24,9 @@ public class RefreshToken
     public DateTime CreatedAt { get; set; }
     public DateTime? RevokedAt { get; set; }
 
+    /// <summary>Hash of the token that replaced this one on rotation. Set = revoked by rotation (vs logout).</summary>
+    public string? ReplacedByTokenHash { get; set; }
+
     public bool IsRevoked => RevokedAt.HasValue;
 
     public Guid UserId { get; set; }

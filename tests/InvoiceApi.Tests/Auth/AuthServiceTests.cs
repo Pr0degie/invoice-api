@@ -5,6 +5,7 @@ using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos;
 using InvoiceApi.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 
 namespace InvoiceApi.Tests.Auth;
@@ -26,7 +27,8 @@ public class AuthServiceTests : IDisposable
         var passwordHasher = new BCryptPasswordHasher();
         var jwtService = new JwtTokenService(config);
 
-        _sut = new AuthService(_db, passwordHasher, jwtService, config);
+        _sut = new AuthService(_db, passwordHasher, jwtService, config,
+            new MemoryCache(new MemoryCacheOptions()));
     }
 
     [Fact]
@@ -159,6 +161,47 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.RefreshAsync(refreshToken);
 
         await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task Refresh_WithJustRotatedToken_WithinGrace_ReturnsSameSuccessorTokens()
+    {
+        // Two concurrent refreshes with the same token: the second one must not 401
+        // but receive the identical successor tokens.
+        var registered = await _sut.RegisterAsync(new RegisterDto("grace@example.com", "password123", "User"));
+        var oldRefreshToken = registered.RefreshToken;
+
+        var first = await _sut.RefreshAsync(oldRefreshToken);
+        var second = await _sut.RefreshAsync(oldRefreshToken);
+
+        second.RefreshToken.Should().Be(first.RefreshToken);
+        second.Token.Should().Be(first.Token);
+    }
+
+    [Fact]
+    public async Task Refresh_WithRotatedToken_AfterGrace_RevokesAllUserTokens()
+    {
+        // Replaying a rotated token after the grace window is a theft signal.
+        var registered = await _sut.RegisterAsync(new RegisterDto("theft@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        var oldRefreshToken = registered.RefreshToken;
+
+        var successor = await _sut.RefreshAsync(oldRefreshToken);
+
+        // Age the rotation past the 60s grace window
+        var rotated = await _db.RefreshTokens
+            .FirstAsync(t => t.Token == RefreshTokenHasher.Hash(oldRefreshToken));
+        rotated.RevokedAt = DateTime.UtcNow.AddSeconds(-120);
+        await _db.SaveChangesAsync();
+
+        var act = () => _sut.RefreshAsync(oldRefreshToken);
+        await act.Should().ThrowAsync<UnauthorizedException>();
+
+        // Every session is dead, including the legitimate successor
+        (await _db.RefreshTokens.AnyAsync(t => t.UserId == userId && t.RevokedAt == null))
+            .Should().BeFalse();
+        var successorAct = () => _sut.RefreshAsync(successor.RefreshToken);
+        await successorAct.Should().ThrowAsync<UnauthorizedException>();
     }
 
     [Fact]

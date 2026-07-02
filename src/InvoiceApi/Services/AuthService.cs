@@ -3,6 +3,7 @@ using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace InvoiceApi.Services;
 
@@ -21,8 +22,16 @@ public class AuthService(
     AppDbContext db,
     IPasswordHasher passwordHasher,
     IJwtTokenService jwtTokenService,
-    IConfiguration config) : IAuthService
+    IConfiguration config,
+    IMemoryCache cache) : IAuthService
 {
+    // Concurrent refreshes (two tabs, request retry) race on single-use rotation.
+    // A token rotated less than this many seconds ago replays its successor
+    // instead of 401ing. See docs/adr/0001-refresh-token-rotation-grace.md.
+    private const int RotationGraceSeconds = 60;
+
+    private static string GraceCacheKey(string tokenHash) => $"refresh-grace:{tokenHash}";
+
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
     {
         var normalizedEmail = dto.Email.ToLowerInvariant();
@@ -79,17 +88,47 @@ public class AuthService(
             .Include(t => t.User)
             .FirstOrDefaultAsync(t => t.Token == tokenHash, ct);
 
-        if (token is null || token.IsRevoked || token.ExpiresAt < DateTime.UtcNow)
+        if (token is null || token.ExpiresAt < DateTime.UtcNow)
             throw new UnauthorizedException("Invalid or expired refresh token.");
+
+        if (token.IsRevoked)
+        {
+            var withinGrace = token.RevokedAt >= DateTime.UtcNow.AddSeconds(-RotationGraceSeconds);
+
+            // Rotated moments ago (concurrent refresh) → replay the same successor tokens.
+            if (token.ReplacedByTokenHash is not null && withinGrace
+                && cache.TryGetValue<AuthResponseDto>(GraceCacheKey(tokenHash), out var cachedSuccessor))
+            {
+                return cachedSuccessor!;
+            }
+
+            // Reuse of a rotated token after the grace window is a theft signal:
+            // someone replayed a token whose successor is already in use. Kill all sessions.
+            if (token.ReplacedByTokenHash is not null && !withinGrace)
+            {
+                var activeTokens = await db.RefreshTokens
+                    .Where(t => t.UserId == token.UserId && t.RevokedAt == null)
+                    .ToListAsync(ct);
+                var now = DateTime.UtcNow;
+                foreach (var t in activeTokens)
+                    t.RevokedAt = now;
+                await db.SaveChangesAsync(ct);
+            }
+
+            throw new UnauthorizedException("Invalid or expired refresh token.");
+        }
 
         token.RevokedAt = DateTime.UtcNow;
 
         var (newRefreshToken, rawToken) = CreateRefreshToken(token.UserId);
+        token.ReplacedByTokenHash = newRefreshToken.Token;
         db.RefreshTokens.Add(newRefreshToken);
 
         await db.SaveChangesAsync(ct);
 
-        return BuildAuthResponse(token.User, rawToken);
+        var response = BuildAuthResponse(token.User, rawToken);
+        cache.Set(GraceCacheKey(tokenHash), response, TimeSpan.FromSeconds(RotationGraceSeconds));
+        return response;
     }
 
     public async Task RevokeRefreshTokenAsync(string refreshToken, CancellationToken ct = default)
