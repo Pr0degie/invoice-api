@@ -11,9 +11,9 @@ REST API for creating invoices and exporting them as PDF — built because every
 ## What it does
 
 - Create invoices with line items (hourly, flat, per piece, per day)
-- Auto-generates invoice numbers (`INV-2024-0001`)
+- Assigns sequential invoice numbers at finalization (`2026-001`) — per user, per calendar year, never reused; drafts have no number
 - Exports invoices as properly formatted A4 PDFs
-- Track status: Draft → Sent → Paid / Overdue
+- Track status: Draft → Finalized → Paid, plus Storno (cancellation) invoices — overdue is derived from the due date, not stored
 - Pagination, filtering by status
 - Swagger UI out of the box
 
@@ -59,6 +59,7 @@ POST   /api/auth/login      — sign in        → { token, refreshToken, expire
 POST   /api/auth/refresh    — rotate tokens  → { token, refreshToken, expiresAt, user }
 POST   /api/auth/logout     — revoke refresh token
 GET    /api/auth/me         — current user info  [requires Bearer token]
+PATCH  /api/auth/me         — update profile / tax data (tax IDs, § 19 flag, address, bank details)  [requires Bearer token]
 ```
 
 ### Invoice endpoints (require Bearer token)
@@ -67,13 +68,16 @@ All `/api/invoices/*` endpoints return 401 without a valid JWT.
 Invoices are isolated per user — each user only sees their own.
 
 ```
-POST   /api/invoices              — create invoice
-GET    /api/invoices              — list (filter: ?status=Paid&page=1&pageSize=25)
-GET    /api/invoices/stats        — dashboard KPIs (?from=<iso>&to=<iso>)
-GET    /api/invoices/{id}         — get single invoice
-PATCH  /api/invoices/{id}/status  — update status
-GET    /api/invoices/{id}/pdf     — download as PDF
-DELETE /api/invoices/{id}         — delete draft
+POST   /api/invoices                — create invoice (as Draft, no number yet)
+GET    /api/invoices                — list (filter: ?status=Paid&page=1&pageSize=25 — also accepts the virtual ?status=Overdue)
+GET    /api/invoices/stats          — dashboard KPIs (?from=<iso>&to=<iso>)
+GET    /api/invoices/{id}           — get single invoice
+PUT    /api/invoices/{id}           — edit invoice (drafts only, 409 otherwise)
+POST   /api/invoices/{id}/finalize  — assign number, snapshot tax data, archive PDF (drafts only)
+POST   /api/invoices/{id}/cancel    — create a Stornorechnung, original becomes Cancelled (finalized only)
+PATCH  /api/invoices/{id}/status    — mark paid / undo (Finalized ⇄ Paid only)
+GET    /api/invoices/{id}/pdf       — download PDF (archived copy once finalized)
+DELETE /api/invoices/{id}           — delete draft (drafts only, 409 otherwise)
 ```
 
 Full spec available via Swagger when running locally.
@@ -111,7 +115,7 @@ Content-Type: application/json
 ```json
 {
   "id": "3fa85f64-...",
-  "number": "INV-2024-0001",
+  "number": null,
   "subtotal": 870.00,
   "taxAmount": 165.30,
   "total": 1035.30,
@@ -132,7 +136,7 @@ A demo user is seeded automatically on the first startup when `Seed:Enabled=true
 | **Email** | `demo@invoiceflow.app` |
 | **Password** | `DemoPass123!` |
 
-The demo account includes 15 invoices across 6 recipients, various statuses (Draft, Sent, Paid, Overdue), and 11 months of history — enough to make the dashboard stats meaningful.
+The demo account includes 15 invoices across 6 recipients, various statuses (Draft, Finalized — shown as "Open", some of them overdue — Paid, Cancelled), and 11 months of history — enough to make the dashboard stats meaningful.
 
 ---
 
@@ -142,7 +146,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-34 unit tests covering service logic, totals, number generation, user isolation, stats aggregation, and auth flows.
+89 unit tests covering service logic, totals, number generation, finalize/cancel lifecycle, PDF archiving, user isolation, stats aggregation, and auth flows.
 
 ---
 
@@ -179,7 +183,7 @@ DB migrations run automatically on startup.
 
 ## Notes
 
-Invoice numbers are sequential per calendar year. If you need a different format (e.g. `2024/001` or customer-specific prefixes), that's a 5-minute change in `InvoiceService.GenerateNumberAsync`.
+Invoice numbers are assigned at finalization — sequential per user and calendar year (`2026-001`), never reused. The sequence lives in the `InvoiceNumberSequences` table with the counter as an EF concurrency token, plus a unique `(UserId, Number)` index as a backstop. Drafts carry no number until finalized.
 
 QuestPDF is used under the Community License — free for open source projects and commercial use below $1M annual revenue.
 
