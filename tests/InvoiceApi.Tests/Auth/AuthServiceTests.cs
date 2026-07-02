@@ -246,11 +246,11 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ChangePassword_NonExistentUser_ThrowsNotFoundException()
+    public async Task ChangePassword_NonExistentUser_ThrowsUnauthorizedException()
     {
         var act = () => _sut.ChangePasswordAsync(Guid.NewGuid(), new ChangePasswordDto("any", "newpassword123"));
 
-        await act.Should().ThrowAsync<NotFoundException>();
+        await act.Should().ThrowAsync<UnauthorizedException>();
     }
 
     [Fact]
@@ -321,11 +321,11 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateProfile_NonExistentUser_ShouldThrowNotFoundException()
+    public async Task UpdateProfile_NonExistentUser_ShouldThrowUnauthorizedException()
     {
         var act = () => _sut.UpdateProfileAsync(Guid.NewGuid(), new UpdateProfileDto("Name", null, null));
 
-        await act.Should().ThrowAsync<NotFoundException>();
+        await act.Should().ThrowAsync<UnauthorizedException>();
     }
 
     [Fact]
@@ -360,11 +360,11 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAccount_NonExistent_ThrowsNotFound()
+    public async Task DeleteAccount_NonExistent_ThrowsUnauthorized()
     {
         var act = () => _sut.DeleteAccountAsync(Guid.NewGuid());
 
-        await act.Should().ThrowAsync<NotFoundException>();
+        await act.Should().ThrowAsync<UnauthorizedException>();
     }
 
     // ---

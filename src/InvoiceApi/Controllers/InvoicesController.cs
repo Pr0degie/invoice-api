@@ -1,5 +1,4 @@
 using InvoiceApi.Data;
-using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos.Stats;
 using InvoiceApi.Services;
@@ -64,16 +63,7 @@ public class InvoicesController(
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await invoices.GetAsync(id, ct));
-        }
-        catch (NotFoundException ex)
-        {
-            return NotFound(new { error = ex.Message });
-        }
-    }
+        => Ok(await invoices.GetAsync(id, ct));
 
     /// <summary>List invoices with optional status filter and pagination.</summary>
     [HttpGet]
@@ -95,20 +85,7 @@ public class InvoicesController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Update(Guid id, [FromBody] CreateInvoiceRequest request, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await invoices.UpdateAsync(id, request, ct));
-        }
-        catch (NotFoundException ex)
-        {
-            return NotFound(new { error = ex.Message });
-        }
-        catch (ConflictException ex)
-        {
-            return Conflict(new { error = ex.Message });
-        }
-    }
+        => Ok(await invoices.UpdateAsync(id, request, ct));
 
     /// <summary>Update the status of an invoice (e.g. mark as Paid).</summary>
     [HttpPatch("{id:guid}/status")]
@@ -116,20 +93,7 @@ public class InvoicesController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateStatusRequest request, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await invoices.UpdateStatusAsync(id, request.Status, ct));
-        }
-        catch (NotFoundException ex)
-        {
-            return NotFound(new { error = ex.Message });
-        }
-        catch (ConflictException ex)
-        {
-            return Conflict(new { error = ex.Message });
-        }
-    }
+        => Ok(await invoices.UpdateStatusAsync(id, request.Status, ct));
 
     /// <summary>Download the invoice as a PDF.</summary>
     [HttpGet("{id:guid}/pdf")]
@@ -157,18 +121,7 @@ public class InvoicesController(
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
-        try
-        {
-            await invoices.DeleteAsync(id, ct);
-            return NoContent();
-        }
-        catch (NotFoundException ex)
-        {
-            return NotFound(new { error = ex.Message });
-        }
-        catch (ConflictException ex)
-        {
-            return Conflict(new { error = ex.Message });
-        }
+        await invoices.DeleteAsync(id, ct);
+        return NoContent();
     }
 }

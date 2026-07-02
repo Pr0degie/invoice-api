@@ -159,8 +159,9 @@ public class AuthService(
 
     public async Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default)
     {
+        // Valid JWT but no user row = account deleted → 401 so the client signs out
         var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new NotFoundException("User not found.");
+            ?? throw new UnauthorizedException("User not found.");
 
         if (dto.Name is not null)
             user.Name = dto.Name == "" ? throw new ValidationException("Name cannot be empty.") : dto.Name.Trim();
@@ -179,8 +180,9 @@ public class AuthService(
 
     public async Task ChangePasswordAsync(Guid userId, ChangePasswordDto dto, CancellationToken ct = default)
     {
+        // Valid JWT but no user row = account deleted → 401 so the client signs out
         var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new NotFoundException("User not found.");
+            ?? throw new UnauthorizedException("User not found.");
 
         if (!passwordHasher.Verify(dto.CurrentPassword, user.PasswordHash))
             throw new ValidationException("invalid_current_password");
@@ -201,8 +203,9 @@ public class AuthService(
 
     public async Task DeleteAccountAsync(Guid userId, CancellationToken ct = default)
     {
+        // Valid JWT but no user row = account deleted → 401 so the client signs out
         var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new NotFoundException("User not found.");
+            ?? throw new UnauthorizedException("User not found.");
 
         db.Users.Remove(user);
         await db.SaveChangesAsync(ct);

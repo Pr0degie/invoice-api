@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using InvoiceApi.Data;
+using InvoiceApi.Middleware;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -174,6 +175,9 @@ using (var scope = app.Services.CreateScope())
 app.UseForwardedHeaders();
 
 app.UseSerilogRequestLogging();
+
+// Domain exceptions → status codes with { error } body
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Security headers — HSTS is handled at the edge (Railway / Cloudflare)
 app.Use(async (ctx, next) =>

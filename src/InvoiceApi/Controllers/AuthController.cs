@@ -39,16 +39,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginDto dto, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await authService.LoginAsync(dto, ct));
-        }
-        catch (UnauthorizedException)
-        {
-            return Unauthorized(new { error = "Invalid credentials." });
-        }
-    }
+        => Ok(await authService.LoginAsync(dto, ct));
 
     /// <summary>Refresh an access token using a refresh token.</summary>
     [HttpPost("refresh")]
@@ -56,16 +47,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto dto, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await authService.RefreshAsync(dto.RefreshToken, ct));
-        }
-        catch (UnauthorizedException)
-        {
-            return Unauthorized(new { error = "Invalid or expired refresh token." });
-        }
-    }
+        => Ok(await authService.RefreshAsync(dto.RefreshToken, ct));
 
     /// <summary>Revoke a refresh token (logout).</summary>
     [HttpPost("logout")]
@@ -108,15 +90,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         if (sub is null || !Guid.TryParse(sub, out var userId))
             return Unauthorized();
 
-        try
-        {
-            var result = await authService.UpdateProfileAsync(userId, dto, ct);
-            return Ok(result);
-        }
-        catch (NotFoundException)
-        {
-            return Unauthorized();
-        }
+        return Ok(await authService.UpdateProfileAsync(userId, dto, ct));
     }
 
     /// <summary>Change the current user's password. Revokes all existing refresh tokens.</summary>
@@ -132,19 +106,8 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         if (sub is null || !Guid.TryParse(sub, out var userId))
             return Unauthorized();
 
-        try
-        {
-            await authService.ChangePasswordAsync(userId, dto, ct);
-            return NoContent();
-        }
-        catch (ValidationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
-        catch (NotFoundException)
-        {
-            return Unauthorized();
-        }
+        await authService.ChangePasswordAsync(userId, dto, ct);
+        return NoContent();
     }
 
     /// <summary>Delete the current user's account. Cascades to invoices and refresh tokens.</summary>
@@ -158,14 +121,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         if (sub is null || !Guid.TryParse(sub, out var userId))
             return Unauthorized();
 
-        try
-        {
-            await authService.DeleteAccountAsync(userId, ct);
-            return NoContent();
-        }
-        catch (NotFoundException)
-        {
-            return Unauthorized();
-        }
+        await authService.DeleteAccountAsync(userId, ct);
+        return NoContent();
     }
 }
