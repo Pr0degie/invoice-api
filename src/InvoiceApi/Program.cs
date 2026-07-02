@@ -97,8 +97,11 @@ builder.Services.AddRateLimiter(opts =>
     opts.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 
-// CORS — named policy, exact origins + Vercel preview pattern
+// CORS — named policy, exact origins + optional preview-deploy suffix.
+// No AllowCredentials: the API is Bearer-only; credentials mode is for cookies.
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+// e.g. "-tobias-team.vercel.app" (the Vercel team scope). Empty = preview deploys disabled.
+var previewOriginSuffix = builder.Configuration["Cors:PreviewOriginSuffix"];
 
 builder.Services.AddCors(opts =>
     opts.AddPolicy("InvoiceFlowFrontend", p =>
@@ -107,15 +110,13 @@ builder.Services.AddCors(opts =>
             if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase))
                 return true;
 
-            // Allow Vercel preview deployments without wildcards in config
-            return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+            return !string.IsNullOrEmpty(previewOriginSuffix)
+                && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
                 && uri.Scheme == "https"
-                && uri.Host.StartsWith("invoiceflow-", StringComparison.OrdinalIgnoreCase)
-                && uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase);
+                && uri.Host.EndsWith(previewOriginSuffix, StringComparison.OrdinalIgnoreCase);
         })
         .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials()));
+        .AllowAnyMethod()));
 
 builder.Services.AddControllers()
     .AddJsonOptions(opts =>
