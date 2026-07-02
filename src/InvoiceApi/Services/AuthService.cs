@@ -172,6 +172,34 @@ public class AuthService(
         if (dto.DefaultSenderAddress is not null)
             user.DefaultSenderAddress = dto.DefaultSenderAddress == "" ? null : dto.DefaultSenderAddress.Trim();
 
+        if (dto.TaxNumber is not null)
+            user.TaxNumber = NullIfEmpty(dto.TaxNumber);
+
+        if (dto.VatId is not null)
+            user.VatId = NullIfEmpty(dto.VatId)?.Replace(" ", "").ToUpperInvariant();
+
+        if (dto.IsSmallBusiness is not null)
+            user.IsSmallBusiness = dto.IsSmallBusiness.Value;
+
+        if (dto.Street is not null) user.Street = NullIfEmpty(dto.Street);
+        if (dto.PostalCode is not null) user.PostalCode = NullIfEmpty(dto.PostalCode);
+        if (dto.City is not null) user.City = NullIfEmpty(dto.City);
+        if (dto.Country is not null) user.Country = NullIfEmpty(dto.Country);
+
+        if (dto.Iban is not null)
+        {
+            var iban = NullIfEmpty(dto.Iban)?.Replace(" ", "").ToUpperInvariant();
+            if (iban is not null && !System.Text.RegularExpressions.Regex.IsMatch(iban, "^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$"))
+                throw new ValidationException("IBAN format is invalid.");
+            user.Iban = iban;
+        }
+
+        if (dto.Bic is not null)
+            user.Bic = NullIfEmpty(dto.Bic)?.Replace(" ", "").ToUpperInvariant();
+
+        if (dto.BankName is not null)
+            user.BankName = NullIfEmpty(dto.BankName);
+
         user.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
@@ -223,6 +251,13 @@ public class AuthService(
         );
     }
 
+    private static string? NullIfEmpty(string value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static UserDto ToUserDto(User user) =>
-        new(user.Id, user.Email, user.Name, user.CreatedAt, user.DefaultSenderName, user.DefaultSenderAddress);
+        new(user.Id, user.Email, user.Name, user.CreatedAt,
+            user.DefaultSenderName, user.DefaultSenderAddress,
+            user.TaxNumber, user.VatId, user.IsSmallBusiness,
+            user.Street, user.PostalCode, user.City, user.Country,
+            user.Iban, user.Bic, user.BankName);
 }

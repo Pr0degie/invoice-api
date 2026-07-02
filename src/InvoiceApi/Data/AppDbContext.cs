@@ -9,15 +9,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<LineItem> LineItems => Set<LineItem>();
     public DbSet<User> Users => Set<User>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<InvoicePdf> InvoicePdfs => Set<InvoicePdf>();
+    public DbSet<InvoiceNumberSequence> InvoiceNumberSequences => Set<InvoiceNumberSequence>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<Invoice>(e =>
         {
             e.HasKey(x => x.Id);
-            e.Property(x => x.Number).IsRequired().HasMaxLength(50);
+            // Number is null while Draft; unique per user once assigned
+            // (Postgres treats NULLs as distinct, so many drafts coexist).
+            e.Property(x => x.Number).HasMaxLength(50);
             e.HasIndex(x => new { x.UserId, x.Number }).IsUnique()
              .HasDatabaseName("IX_Invoices_UserId_Number");
+            e.Property(x => x.CancellationOfNumber).HasMaxLength(50);
+            // SetNull so account deletion (user → invoices cascade) never trips over
+            // the storno→original link; CancellationOfNumber keeps the reference text.
+            e.HasOne<Invoice>()
+             .WithMany()
+             .HasForeignKey(x => x.CancellationOfId)
+             .OnDelete(DeleteBehavior.SetNull);
             e.Property(x => x.Currency).HasMaxLength(3);
             e.Property(x => x.TaxRate).HasPrecision(5, 4);
             e.HasMany(x => x.LineItems)
@@ -59,6 +70,33 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.PasswordHash).IsRequired();
             e.Property(x => x.DefaultSenderName).HasMaxLength(200);
             e.Property(x => x.DefaultSenderAddress).HasMaxLength(200);
+            e.Property(x => x.TaxNumber).HasMaxLength(50);
+            e.Property(x => x.VatId).HasMaxLength(20);
+            e.Property(x => x.IsSmallBusiness).HasDefaultValue(true);
+            e.Property(x => x.Street).HasMaxLength(200);
+            e.Property(x => x.PostalCode).HasMaxLength(20);
+            e.Property(x => x.City).HasMaxLength(100);
+            e.Property(x => x.Country).HasMaxLength(100);
+            e.Property(x => x.Iban).HasMaxLength(34);
+            e.Property(x => x.Bic).HasMaxLength(11);
+            e.Property(x => x.BankName).HasMaxLength(100);
+        });
+
+        b.Entity<InvoicePdf>(e =>
+        {
+            e.HasKey(x => x.InvoiceId);
+            e.HasOne(x => x.Invoice)
+             .WithOne()
+             .HasForeignKey<InvoicePdf>(x => x.InvoiceId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<InvoiceNumberSequence>(e =>
+        {
+            e.HasKey(x => new { x.UserId, x.Year });
+            // Counter is the concurrency token — concurrent finalizations race on
+            // the increment and the loser retries with a fresh number.
+            e.Property(x => x.Counter).IsConcurrencyToken();
         });
 
         b.Entity<RefreshToken>(e =>

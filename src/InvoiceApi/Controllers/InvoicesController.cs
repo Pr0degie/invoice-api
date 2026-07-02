@@ -24,7 +24,8 @@ public class InvoicesController(
     /// <summary>Dashboard statistics for the authenticated user.</summary>
     /// <remarks>
     /// Defaults: from = today − 1 year, to = today. Capped to a maximum 5-year window.
-    /// Outstanding = Sent + Overdue (by IssueDate). Paid is filtered by PaidAt. Draft by CreatedAt.
+    /// Outstanding = Finalized (by IssueDate); overdue = subset past its due date.
+    /// Paid is filtered by PaidAt. Draft by CreatedAt. Cancellation invoices excluded.
     /// </remarks>
     [HttpGet("stats")]
     [ProducesResponseType<StatsDto>(StatusCodes.Status200OK)]
@@ -66,18 +67,63 @@ public class InvoicesController(
         => Ok(await invoices.GetAsync(id, ct));
 
     /// <summary>List invoices with optional status filter and pagination.</summary>
+    /// <remarks>
+    /// status: Draft | Finalized | Paid | Cancelled | Overdue. "Overdue" is a virtual
+    /// filter (Finalized invoices past their due date) — it is not a stored status.
+    /// </remarks>
     [HttpGet]
     [ProducesResponseType<List<InvoiceResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List(
-        [FromQuery] InvoiceStatus? status,
+        [FromQuery] string? status,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25,
         [FromQuery] string? search = null,
         CancellationToken ct = default)
     {
         pageSize = Math.Clamp(pageSize, 1, 100);
-        return Ok(await invoices.ListAsync(status, page, pageSize, search, ct));
+
+        InvoiceStatus? statusFilter = null;
+        var overdueOnly = false;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (status.Equals("Overdue", StringComparison.OrdinalIgnoreCase))
+                overdueOnly = true;
+            else if (Enum.TryParse<InvoiceStatus>(status, ignoreCase: true, out var parsed)
+                     && Enum.IsDefined(parsed))
+                statusFilter = parsed;
+            else
+                return BadRequest(new { error = $"Unknown status '{status}'." });
+        }
+
+        return Ok(await invoices.ListAsync(statusFilter, overdueOnly, page, pageSize, search, ct));
     }
+
+    /// <summary>Finalize a draft: assign its sequential number, freeze it, archive the PDF.</summary>
+    /// <remarks>
+    /// Requires a complete sender tax profile (address + Steuernummer or USt-IdNr.)
+    /// and a service date/period on the invoice — 409 otherwise. Afterwards the
+    /// invoice is immutable; corrections go through Storno + new invoice.
+    /// </remarks>
+    [HttpPost("{id:guid}/finalize")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Finalize(Guid id, CancellationToken ct)
+        => Ok(await invoices.FinalizeAsync(id, ct));
+
+    /// <summary>Cancel a finalized invoice by issuing a Stornorechnung.</summary>
+    /// <remarks>
+    /// Creates a Cancellation invoice (own sequential number, negative amounts,
+    /// reference to the original) and sets the original to Cancelled. Returns the
+    /// Stornorechnung.
+    /// </remarks>
+    [HttpPost("{id:guid}/cancel")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
+        => Ok(await invoices.CancelAsync(id, ct));
 
     /// <summary>Update a draft invoice.</summary>
     [HttpPut("{id:guid}")]
@@ -96,6 +142,11 @@ public class InvoicesController(
         => Ok(await invoices.UpdateStatusAsync(id, request.Status, ct));
 
     /// <summary>Download the invoice as a PDF.</summary>
+    /// <remarks>
+    /// Finalized invoices return the PDF archived at finalization (GoBD — never
+    /// re-rendered from live data). Drafts return a live preview with an ENTWURF
+    /// watermark.
+    /// </remarks>
     [HttpGet("{id:guid}/pdf")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -110,8 +161,24 @@ public class InvoicesController(
         if (invoice is null)
             return NotFound(new { error = $"Invoice {id} not found." });
 
-        var bytes = pdf.Generate(invoice);
-        return File(bytes, "application/pdf", $"{invoice.Number}.pdf");
+        var user = await db.Users.FindAsync([userId], ct);
+        if (user is null)
+            return NotFound(new { error = "User not found." });
+
+        if (invoice.Status == InvoiceStatus.Draft)
+            return File(pdf.Generate(invoice, user), "application/pdf", "Entwurf.pdf");
+
+        var archived = await db.InvoicePdfs.FindAsync([invoice.Id], ct);
+        if (archived is null)
+        {
+            // Backfill for invoices finalized before PDF archiving existed: render
+            // once from current data and persist that render as the archive.
+            archived = new InvoicePdf { InvoiceId = invoice.Id, Data = pdf.Generate(invoice, user) };
+            db.InvoicePdfs.Add(archived);
+            await db.SaveChangesAsync(ct);
+        }
+
+        return File(archived.Data, "application/pdf", $"{invoice.Number}.pdf");
     }
 
     /// <summary>Delete a draft invoice.</summary>

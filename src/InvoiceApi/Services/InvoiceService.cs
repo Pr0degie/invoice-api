@@ -9,18 +9,26 @@ public interface IInvoiceService
 {
     Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> GetAsync(Guid id, CancellationToken ct = default);
-    Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, string? search = null, CancellationToken ct = default);
+    Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, bool overdueOnly, int page, int pageSize, string? search = null, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default);
+    Task<InvoiceResponse> FinalizeAsync(Guid id, CancellationToken ct = default);
+    Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
-public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : IInvoiceService
+public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IPdfService pdf) : IInvoiceService
 {
+    // Concurrent finalizations race on the sequence counter (concurrency token) or,
+    // as a backstop, the unique (UserId, Number) index — losers retry with a fresh number.
+    private const int MaxNumberingAttempts = 5;
+
     public async Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest req, CancellationToken ct = default)
     {
         var today = DateOnly.FromDateTime(DateTime.Today);
         var userId = currentUser.CurrentUserId;
+
+        ValidateServiceDates(req);
 
         var lineItems = req.LineItems.Select(li => new LineItem
         {
@@ -34,13 +42,16 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         var invoice = new Invoice
         {
             UserId = userId,
-            Number = await GenerateNumberAsync(userId, ct),
+            Number = null, // assigned at finalization
             SenderName = req.SenderName,
             SenderAddress = req.SenderAddress,
             RecipientName = req.RecipientName,
             RecipientAddress = req.RecipientAddress,
             IssueDate = req.IssueDate ?? today,
             DueDate = req.DueDate ?? today.AddDays(14),
+            ServiceDate = req.ServiceDate,
+            ServicePeriodStart = req.ServicePeriodStart,
+            ServicePeriodEnd = req.ServicePeriodEnd,
             TaxRate = req.TaxRate,
             Currency = req.Currency.ToUpperInvariant(),
             Notes = req.Notes,
@@ -63,10 +74,17 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
-        return invoice.ToResponse();
+        string? cancelledByNumber = null;
+        if (invoice.Status == InvoiceStatus.Cancelled)
+            cancelledByNumber = await db.Invoices
+                .Where(i => i.CancellationOfId == id && i.UserId == userId)
+                .Select(i => i.Number)
+                .FirstOrDefaultAsync(ct);
+
+        return invoice.ToResponse(cancelledByNumber);
     }
 
-    public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, int page, int pageSize, string? search = null, CancellationToken ct = default)
+    public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, bool overdueOnly, int page, int pageSize, string? search = null, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
         var query = db.Invoices.Include(i => i.LineItems).Where(i => i.UserId == userId);
@@ -74,11 +92,19 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         if (status.HasValue)
             query = query.Where(i => i.Status == status.Value);
 
+        if (overdueOnly)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            query = query.Where(i => i.Status == InvoiceStatus.Finalized
+                && i.Type == InvoiceType.Invoice
+                && i.DueDate < today);
+        }
+
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim().ToLower();
             query = query.Where(i =>
-                i.Number.ToLower().Contains(term) ||
+                (i.Number != null && i.Number.ToLower().Contains(term)) ||
                 i.RecipientName.ToLower().Contains(term));
         }
 
@@ -86,13 +112,15 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             .OrderByDescending(i => i.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(i => i.ToResponse())
+            .Select(i => i.ToResponse(null))
             .ToListAsync(ct);
     }
 
     public async Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest req, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
+
+        ValidateServiceDates(req);
 
         // Load without Include to avoid navigation-collection proxy conflicts with InMemory provider.
         var invoice = await db.Invoices
@@ -108,6 +136,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         invoice.RecipientAddress = req.RecipientAddress;
         invoice.IssueDate = req.IssueDate ?? invoice.IssueDate;
         invoice.DueDate = req.DueDate ?? invoice.DueDate;
+        invoice.ServiceDate = req.ServiceDate;
+        invoice.ServicePeriodStart = req.ServicePeriodStart;
+        invoice.ServicePeriodEnd = req.ServicePeriodEnd;
         invoice.Currency = req.Currency.ToUpperInvariant();
         invoice.TaxRate = req.TaxRate;
         invoice.Notes = req.Notes;
@@ -136,15 +167,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
         return invoice.ToResponse();
     }
 
-    // Stopgap transition guard until the full workflow rework (Prompt 12 Part B).
-    // Paid→Overdue exists so a mistakenly-marked payment can be undone; the PaidAt
-    // round trip below keeps the original payment date.
+    // Draft never leaves via PATCH — finalization runs through FinalizeAsync, which
+    // enforces the § 14 preconditions. Cancelled is only reachable via CancelAsync
+    // (Storno). Paid→Finalized is the undo path for a mistaken payment mark.
     private static readonly Dictionary<InvoiceStatus, InvoiceStatus[]> AllowedTransitions = new()
     {
-        [InvoiceStatus.Draft] = [InvoiceStatus.Sent],
-        [InvoiceStatus.Sent] = [InvoiceStatus.Paid, InvoiceStatus.Overdue, InvoiceStatus.Cancelled],
-        [InvoiceStatus.Overdue] = [InvoiceStatus.Paid, InvoiceStatus.Cancelled],
-        [InvoiceStatus.Paid] = [InvoiceStatus.Overdue],
+        [InvoiceStatus.Draft] = [],
+        [InvoiceStatus.Finalized] = [InvoiceStatus.Paid],
+        [InvoiceStatus.Paid] = [InvoiceStatus.Finalized],
         [InvoiceStatus.Cancelled] = [],
     };
 
@@ -157,20 +187,114 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
+        if (invoice.Type == InvoiceType.Cancellation)
+            throw new ConflictException("Cancellation invoices cannot change status.");
+
         if (!AllowedTransitions[invoice.Status].Contains(newStatus))
-            throw new ConflictException($"Cannot change status from {invoice.Status} to {newStatus}.");
+            throw new ConflictException(invoice.Status == InvoiceStatus.Draft && newStatus == InvoiceStatus.Finalized
+                ? "Drafts are finalized via POST /api/invoices/{id}/finalize."
+                : $"Cannot change status from {invoice.Status} to {newStatus}.");
 
         invoice.Status = newStatus;
         invoice.UpdatedAt = DateTimeOffset.UtcNow;
 
         if (newStatus == InvoiceStatus.Paid)
             invoice.PaidAt ??= DateOnly.FromDateTime(DateTime.UtcNow);
-        else if (newStatus == InvoiceStatus.Cancelled)
-            invoice.PaidAt = null;
-        // Overdue keeps PaidAt so Paid→Overdue→Paid preserves the original date
+        // Paid→Finalized keeps PaidAt so a Paid→Finalized→Paid round trip preserves the original date
 
         await db.SaveChangesAsync(ct);
         return invoice.ToResponse();
+    }
+
+    public async Task<InvoiceResponse> FinalizeAsync(Guid id, CancellationToken ct = default)
+    {
+        var userId = currentUser.CurrentUserId;
+
+        var invoice = await db.Invoices
+            .Include(i => i.LineItems)
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
+            ?? throw new NotFoundException($"Invoice {id} not found.");
+
+        if (invoice.Status != InvoiceStatus.Draft)
+            throw new ConflictException("Only draft invoices can be finalized.");
+
+        if (invoice.ServiceDate is null && invoice.ServicePeriodStart is null)
+            throw new ConflictException("A service date or service period is required to finalize (§ 14 Abs. 4 UStG).");
+
+        var user = await db.Users.FindAsync([userId], ct)
+            ?? throw new UnauthorizedException("User not found.");
+        EnsureSenderProfileComplete(user);
+
+        // § 19 UStG: Kleinunternehmer invoices carry no VAT — enforced here, at the
+        // legal fixation point, regardless of what the draft contained.
+        if (user.IsSmallBusiness)
+            invoice.TaxRate = 0m;
+        invoice.IsSmallBusiness = user.IsSmallBusiness;
+        invoice.TotalAmount = invoice.Total;
+        invoice.Status = InvoiceStatus.Finalized;
+        invoice.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await AssignNumberAndSaveAsync(invoice, user, ct);
+        return invoice.ToResponse();
+    }
+
+    public async Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default)
+    {
+        var userId = currentUser.CurrentUserId;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var invoice = await db.Invoices
+            .Include(i => i.LineItems)
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
+            ?? throw new NotFoundException($"Invoice {id} not found.");
+
+        if (invoice.Type == InvoiceType.Cancellation)
+            throw new ConflictException("A cancellation invoice cannot be cancelled.");
+
+        if (invoice.Status != InvoiceStatus.Finalized)
+            throw new ConflictException(invoice.Status == InvoiceStatus.Paid
+                ? "Paid invoices must be set back to Finalized before cancelling."
+                : "Only finalized invoices can be cancelled.");
+
+        var user = await db.Users.FindAsync([userId], ct)
+            ?? throw new UnauthorizedException("User not found.");
+
+        var storno = new Invoice
+        {
+            UserId = userId,
+            Type = InvoiceType.Cancellation,
+            Status = InvoiceStatus.Finalized,
+            SenderName = invoice.SenderName,
+            SenderAddress = invoice.SenderAddress,
+            RecipientName = invoice.RecipientName,
+            RecipientAddress = invoice.RecipientAddress,
+            IssueDate = today,
+            DueDate = today,
+            ServiceDate = invoice.ServiceDate,
+            ServicePeriodStart = invoice.ServicePeriodStart,
+            ServicePeriodEnd = invoice.ServicePeriodEnd,
+            TaxRate = invoice.TaxRate,
+            IsSmallBusiness = invoice.IsSmallBusiness,
+            Currency = invoice.Currency,
+            CancellationOfId = invoice.Id,
+            CancellationOfNumber = invoice.Number,
+            LineItems = invoice.LineItems.Select(li => new LineItem
+            {
+                Description = li.Description,
+                Quantity = -li.Quantity,
+                UnitPrice = li.UnitPrice,
+                Unit = li.Unit
+            }).ToList(),
+        };
+        storno.TotalAmount = storno.Total;
+
+        invoice.Status = InvoiceStatus.Cancelled;
+        invoice.PaidAt = null;
+        invoice.UpdatedAt = DateTimeOffset.UtcNow;
+
+        db.Invoices.Add(storno);
+        await AssignNumberAndSaveAsync(storno, user, ct);
+        return storno.ToResponse();
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
@@ -190,48 +314,121 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser) : 
 
     // ---
 
-    private async Task<string> GenerateNumberAsync(Guid userId, CancellationToken ct)
+    private static void ValidateServiceDates(CreateInvoiceRequest req)
     {
-        var year = DateTime.UtcNow.Year;
-        var prefix = $"INV-{year}-";
+        if (req.ServiceDate.HasValue && (req.ServicePeriodStart.HasValue || req.ServicePeriodEnd.HasValue))
+            throw new ValidationException("Provide either a service date or a service period, not both.");
+        if (req.ServicePeriodStart.HasValue != req.ServicePeriodEnd.HasValue)
+            throw new ValidationException("A service period needs both a start and an end date.");
+        if (req.ServicePeriodStart.HasValue && req.ServicePeriodEnd < req.ServicePeriodStart)
+            throw new ValidationException("The service period end must not be before its start.");
+    }
 
-        var maxNumber = await db.Invoices
-            .Where(i => i.UserId == userId && i.Number.StartsWith(prefix))
-            .OrderByDescending(i => i.Number)
-            .Select(i => i.Number)
-            .FirstOrDefaultAsync(ct);
+    private static void EnsureSenderProfileComplete(User user)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(user.TaxNumber) && string.IsNullOrWhiteSpace(user.VatId))
+            missing.Add("tax number or VAT ID");
+        if (string.IsNullOrWhiteSpace(user.Street)) missing.Add("street");
+        if (string.IsNullOrWhiteSpace(user.PostalCode)) missing.Add("postal code");
+        if (string.IsNullOrWhiteSpace(user.City)) missing.Add("city");
+        if (string.IsNullOrWhiteSpace(user.Country)) missing.Add("country");
 
-        var next = maxNumber is null
-            ? 1
-            : int.Parse(maxNumber.Substring(prefix.Length)) + 1;
+        if (missing.Count > 0)
+            throw new ConflictException(
+                $"Sender profile incomplete — missing: {string.Join(", ", missing)}. Complete your tax settings first.");
+    }
 
-        return $"{prefix}{next:D4}";
+    // Assigns the next sequential number to a Finalized invoice, renders and stores
+    // its PDF, and saves everything in one SaveChanges (one DB transaction). Retries
+    // on sequence-counter races and unique-index violations.
+    private async Task AssignNumberAndSaveAsync(Invoice invoice, User user, CancellationToken ct)
+    {
+        var year = invoice.IssueDate.Year;
+        InvoicePdf? archived = null;
+
+        for (var attempt = 1; ; attempt++)
+        {
+            invoice.Number = await ReserveNumberAsync(invoice.UserId, year, ct);
+
+            var bytes = pdf.Generate(invoice, user);
+            if (archived is null)
+            {
+                archived = new InvoicePdf { InvoiceId = invoice.Id, Data = bytes };
+                db.InvoicePdfs.Add(archived);
+            }
+            else
+            {
+                archived.Data = bytes; // retry: re-render with the fresh number
+            }
+
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                return;
+            }
+            catch (DbUpdateException) when (attempt < MaxNumberingAttempts)
+            {
+                // Lost the race (concurrency token or unique index). Drop our stale
+                // view of the sequence row and try again with the next number.
+                var seqEntry = db.ChangeTracker.Entries<InvoiceNumberSequence>()
+                    .FirstOrDefault(e => e.Entity.UserId == invoice.UserId && e.Entity.Year == year);
+                if (seqEntry is not null)
+                    seqEntry.State = EntityState.Detached;
+            }
+        }
+    }
+
+    private async Task<string> ReserveNumberAsync(Guid userId, int year, CancellationToken ct)
+    {
+        var seq = await db.InvoiceNumberSequences.FindAsync([userId, year], ct);
+        if (seq is null)
+        {
+            seq = new InvoiceNumberSequence { UserId = userId, Year = year, Counter = 0 };
+            db.InvoiceNumberSequences.Add(seq);
+        }
+
+        seq.Counter++;
+        return $"{year}-{seq.Counter:D3}";
     }
 }
 
 internal static class InvoiceMappings
 {
-    public static InvoiceResponse ToResponse(this Invoice i) => new(
-        i.Id,
-        i.Number,
-        i.Status,
-        i.SenderName,
-        i.SenderAddress,
-        i.RecipientName,
-        i.RecipientAddress,
-        i.IssueDate,
-        i.DueDate,
-        i.PaidAt,
-        i.Currency,
-        i.TaxRate,
-        i.Subtotal,
-        i.TaxAmount,
-        i.Total,
-        i.LineItems.Select(li => new LineItemResponse(
-            li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total
-        )).ToList(),
-        i.Notes,
-        i.CreatedAt,
-        i.UpdatedAt
-    );
+    public static InvoiceResponse ToResponse(this Invoice i, string? cancelledByNumber = null)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return new(
+            i.Id,
+            i.Number,
+            i.Status,
+            i.Type,
+            i.Status == InvoiceStatus.Finalized && i.Type == InvoiceType.Invoice && i.DueDate < today,
+            i.SenderName,
+            i.SenderAddress,
+            i.RecipientName,
+            i.RecipientAddress,
+            i.IssueDate,
+            i.DueDate,
+            i.ServiceDate,
+            i.ServicePeriodStart,
+            i.ServicePeriodEnd,
+            i.PaidAt,
+            i.Currency,
+            i.TaxRate,
+            i.IsSmallBusiness,
+            i.Subtotal,
+            i.TaxAmount,
+            i.Total,
+            i.LineItems.Select(li => new LineItemResponse(
+                li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total
+            )).ToList(),
+            i.Notes,
+            i.CancellationOfId,
+            i.CancellationOfNumber,
+            cancelledByNumber,
+            i.CreatedAt,
+            i.UpdatedAt
+        );
+    }
 }

@@ -18,18 +18,21 @@ public class StatsService(AppDbContext db) : IStatsService
         var fromOffset = new DateTimeOffset(from, TimeOnly.MinValue, TimeSpan.Zero);
         var toExclusive = new DateTimeOffset(to.AddDays(1), TimeOnly.MinValue, TimeSpan.Zero);
 
-        // Q1 — Outstanding: Sent + Overdue, filtered by IssueDate
-        var outstandingGroups = await db.Invoices
+        // Q1 — Outstanding: Finalized (unpaid) invoices by IssueDate. Overdue is
+        // derived (past due date), a subset of outstanding. Cancellation invoices
+        // (negative Stornorechnungen) are corrective documents and excluded.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var outstandingItems = await db.Invoices
             .Where(i => i.UserId == userId
-                && (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Overdue)
+                && i.Status == InvoiceStatus.Finalized
+                && i.Type == InvoiceType.Invoice
                 && i.IssueDate >= from && i.IssueDate <= to)
-            .GroupBy(i => i.Status)
-            .Select(g => new { Status = g.Key, Sum = g.Sum(i => i.TotalAmount), Count = g.Count() })
+            .Select(i => new { i.TotalAmount, i.DueDate })
             .ToListAsync(ct);
 
-        var totalOutstanding = outstandingGroups.Sum(g => g.Sum);
-        var sentCount = outstandingGroups.FirstOrDefault(g => g.Status == InvoiceStatus.Sent)?.Count ?? 0;
-        var overdueCount = outstandingGroups.FirstOrDefault(g => g.Status == InvoiceStatus.Overdue)?.Count ?? 0;
+        var totalOutstanding = outstandingItems.Sum(i => i.TotalAmount);
+        var finalizedCount = outstandingItems.Count;
+        var overdueCount = outstandingItems.Count(i => i.DueDate < today);
 
         // Q2 — Paid: filtered by PaidAt; load TotalAmount + RecipientName for topRecipients in memory
         var paidItems = await db.Invoices
@@ -71,9 +74,10 @@ public class StatsService(AppDbContext db) : IStatsService
             .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(i => i.TotalAmount) })
             .ToListAsync(ct);
 
-        var sentByMonth = await db.Invoices
+        var finalizedByMonth = await db.Invoices
             .Where(i => i.UserId == userId
-                && (i.Status == InvoiceStatus.Sent || i.Status == InvoiceStatus.Overdue)
+                && i.Status == InvoiceStatus.Finalized
+                && i.Type == InvoiceType.Invoice
                 && i.IssueDate >= monthWindowStart && i.IssueDate <= to)
             .GroupBy(i => new { i.IssueDate.Year, i.IssueDate.Month })
             .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(i => i.TotalAmount) })
@@ -84,12 +88,12 @@ public class StatsService(AppDbContext db) : IStatsService
             .Select(m => new MonthlyRevenueDto(
                 $"{m.Year:D4}-{m.Month:D2}",
                 paidByMonth.FirstOrDefault(p => p.Year == m.Year && p.Month == m.Month)?.Total ?? 0m,
-                sentByMonth.FirstOrDefault(s => s.Year == m.Year && s.Month == m.Month)?.Total ?? 0m))
+                finalizedByMonth.FirstOrDefault(s => s.Year == m.Year && s.Month == m.Month)?.Total ?? 0m))
             .ToList();
 
         return new StatsDto(
             totalOutstanding, totalPaid, totalDraft,
-            overdueCount, draftCount, sentCount, paidCount,
+            overdueCount, draftCount, finalizedCount, paidCount,
             monthlyRevenue, topRecipients);
     }
 }

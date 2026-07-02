@@ -75,7 +75,10 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
             return Unauthorized();
 
         return Ok(new UserDto(user.Id, user.Email, user.Name, user.CreatedAt,
-            user.DefaultSenderName, user.DefaultSenderAddress));
+            user.DefaultSenderName, user.DefaultSenderAddress,
+            user.TaxNumber, user.VatId, user.IsSmallBusiness,
+            user.Street, user.PostalCode, user.City, user.Country,
+            user.Iban, user.Bic, user.BankName));
     }
 
     /// <summary>Update name and/or sender defaults for the current user.</summary>

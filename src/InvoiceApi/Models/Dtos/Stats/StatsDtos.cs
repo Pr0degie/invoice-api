@@ -6,12 +6,12 @@ public record StatsDto(
     decimal TotalDraft,
     int OverdueCount,
     int DraftCount,
-    int SentCount,
+    int FinalizedCount,
     int PaidCount,
     IReadOnlyList<MonthlyRevenueDto> MonthlyRevenue,
     IReadOnlyList<TopRecipientDto> TopRecipients
 );
 
-public record MonthlyRevenueDto(string Month, decimal Paid, decimal Sent);
+public record MonthlyRevenueDto(string Month, decimal Paid, decimal Finalized);
 
 public record TopRecipientDto(string Name, decimal Total, int Count);

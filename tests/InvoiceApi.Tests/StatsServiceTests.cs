@@ -38,11 +38,11 @@ public class StatsServiceTests : IDisposable
         stats.TotalDraft.Should().Be(0);
         stats.OverdueCount.Should().Be(0);
         stats.DraftCount.Should().Be(0);
-        stats.SentCount.Should().Be(0);
+        stats.FinalizedCount.Should().Be(0);
         stats.PaidCount.Should().Be(0);
         stats.TopRecipients.Should().BeEmpty();
         stats.MonthlyRevenue.Should().HaveCount(12);
-        stats.MonthlyRevenue.Should().AllSatisfy(m => { m.Paid.Should().Be(0); m.Sent.Should().Be(0); });
+        stats.MonthlyRevenue.Should().AllSatisfy(m => { m.Paid.Should().Be(0); m.Finalized.Should().Be(0); });
     }
 
     // ── Per-status counts and sums ───────────────────────────────────────────
@@ -53,21 +53,40 @@ public class StatsServiceTests : IDisposable
         var issue = Jan1.AddMonths(1);
         var paid = Jan1.AddMonths(2);
 
-        Add(InvoiceStatus.Draft,   100m, issue, createdAt: new DateTimeOffset(issue.Year, issue.Month, issue.Day, 0, 0, 0, TimeSpan.Zero));
-        Add(InvoiceStatus.Sent,    200m, issue);
-        Add(InvoiceStatus.Overdue, 300m, issue);
-        Add(InvoiceStatus.Paid,    400m, issue, paidAt: paid);
+        Add(InvoiceStatus.Draft,     100m, issue, createdAt: new DateTimeOffset(issue.Year, issue.Month, issue.Day, 0, 0, 0, TimeSpan.Zero));
+        Add(InvoiceStatus.Finalized, 200m, issue, dueDate: Today.AddDays(30));  // outstanding, not overdue
+        Add(InvoiceStatus.Finalized, 300m, issue, dueDate: Today.AddDays(-5));  // outstanding + overdue
+        Add(InvoiceStatus.Paid,      400m, issue, paidAt: paid);
         await _db.SaveChangesAsync();
 
         var stats = await _sut.GetStatsAsync(_userId, Jan1, Dec31);
 
-        stats.TotalOutstanding.Should().Be(500m); // Sent + Overdue
+        stats.TotalOutstanding.Should().Be(500m); // all Finalized
         stats.TotalPaid.Should().Be(400m);
         stats.TotalDraft.Should().Be(100m);
-        stats.SentCount.Should().Be(1);
-        stats.OverdueCount.Should().Be(1);
+        stats.FinalizedCount.Should().Be(2);
+        stats.OverdueCount.Should().Be(1); // only the past-due one
         stats.PaidCount.Should().Be(1);
         stats.DraftCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetStatsAsync_CancellationInvoices_AreExcluded()
+    {
+        var issue = Jan1.AddMonths(1);
+
+        Add(InvoiceStatus.Finalized, 500m, issue, dueDate: Today.AddDays(-5));
+        // Stornorechnung: Finalized but a corrective document — must not count
+        Add(InvoiceStatus.Finalized, -500m, issue, type: InvoiceType.Cancellation);
+        // the cancelled original is likewise out of the outstanding pool
+        Add(InvoiceStatus.Cancelled, 500m, issue);
+        await _db.SaveChangesAsync();
+
+        var stats = await _sut.GetStatsAsync(_userId, Jan1, Dec31);
+
+        stats.TotalOutstanding.Should().Be(500m);
+        stats.FinalizedCount.Should().Be(1);
+        stats.OverdueCount.Should().Be(1);
     }
 
     // ── User isolation ───────────────────────────────────────────────────────
@@ -80,17 +99,17 @@ public class StatsServiceTests : IDisposable
         var paid = Jan1.AddMonths(2);
 
         // Other user's invoices — must not appear in _userId's stats
-        _db.Invoices.Add(MakeInvoice(otherUser, InvoiceStatus.Sent, 999m, issue));
+        _db.Invoices.Add(MakeInvoice(otherUser, InvoiceStatus.Finalized, 999m, issue));
         _db.Invoices.Add(MakeInvoice(otherUser, InvoiceStatus.Paid, 888m, issue, paidAt: paid));
         // One invoice for the correct user
-        Add(InvoiceStatus.Sent, 100m, issue);
+        Add(InvoiceStatus.Finalized, 100m, issue);
         await _db.SaveChangesAsync();
 
         var stats = await _sut.GetStatsAsync(_userId, Jan1, Dec31);
 
         stats.TotalOutstanding.Should().Be(100m);
         stats.TotalPaid.Should().Be(0m);
-        stats.SentCount.Should().Be(1);
+        stats.FinalizedCount.Should().Be(1);
         stats.PaidCount.Should().Be(0);
     }
 
@@ -104,8 +123,8 @@ public class StatsServiceTests : IDisposable
         var insidePaid = Jan1.AddMonths(6);
         var outsidePaid = Jan1.AddYears(-1);
 
-        Add(InvoiceStatus.Sent,  200m, insideIssue);
-        Add(InvoiceStatus.Sent,  999m, outsideIssue); // excluded
+        Add(InvoiceStatus.Finalized,  200m, insideIssue);
+        Add(InvoiceStatus.Finalized,  999m, outsideIssue); // excluded
         Add(InvoiceStatus.Paid,  300m, insideIssue, paidAt: insidePaid);
         Add(InvoiceStatus.Paid,  888m, outsideIssue, paidAt: outsidePaid); // excluded
         await _db.SaveChangesAsync();
@@ -114,7 +133,7 @@ public class StatsServiceTests : IDisposable
 
         stats.TotalOutstanding.Should().Be(200m);
         stats.TotalPaid.Should().Be(300m);
-        stats.SentCount.Should().Be(1);
+        stats.FinalizedCount.Should().Be(1);
         stats.PaidCount.Should().Be(1);
     }
 
@@ -153,22 +172,22 @@ public class StatsServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetStatsAsync_MonthlyRevenue_SentAmountsGroupedByIssueDate()
+    public async Task GetStatsAsync_MonthlyRevenue_FinalizedAmountsGroupedByIssueDate()
     {
         var year = Today.Year;
         var m4 = new DateOnly(year, 4, 5);
         var m7 = new DateOnly(year, 7, 20);
 
-        Add(InvoiceStatus.Sent, 150m, m4);
-        Add(InvoiceStatus.Overdue, 250m, m7); // Overdue also counts as "sent" in monthly
+        Add(InvoiceStatus.Finalized, 150m, m4);
+        Add(InvoiceStatus.Finalized, 250m, m7, dueDate: Today.AddDays(-10)); // overdue still counts as finalized
 
         await _db.SaveChangesAsync();
 
         var stats = await _sut.GetStatsAsync(_userId, new DateOnly(year, 1, 1), new DateOnly(year, 12, 31));
 
         var months = stats.MonthlyRevenue.ToDictionary(m => m.Month);
-        months[$"{year:D4}-04"].Sent.Should().Be(150m);
-        months[$"{year:D4}-07"].Sent.Should().Be(250m);
+        months[$"{year:D4}-04"].Finalized.Should().Be(150m);
+        months[$"{year:D4}-07"].Finalized.Should().Be(250m);
     }
 
     // ── Top recipients ───────────────────────────────────────────────────────
@@ -219,9 +238,11 @@ public class StatsServiceTests : IDisposable
         DateOnly issueDate,
         DateOnly? paidAt = null,
         DateTimeOffset? createdAt = null,
-        string recipient = "Test Client")
+        string recipient = "Test Client",
+        DateOnly? dueDate = null,
+        InvoiceType type = InvoiceType.Invoice)
     {
-        _db.Invoices.Add(MakeInvoice(_userId, status, totalAmount, issueDate, paidAt, createdAt, recipient));
+        _db.Invoices.Add(MakeInvoice(_userId, status, totalAmount, issueDate, paidAt, createdAt, recipient, dueDate, type));
     }
 
     private static Invoice MakeInvoice(
@@ -231,17 +252,20 @@ public class StatsServiceTests : IDisposable
         DateOnly issueDate,
         DateOnly? paidAt = null,
         DateTimeOffset? createdAt = null,
-        string recipient = "Test Client") => new()
+        string recipient = "Test Client",
+        DateOnly? dueDate = null,
+        InvoiceType type = InvoiceType.Invoice) => new()
     {
         Id = Guid.NewGuid(),
         UserId = userId,
-        Number = $"INV-{Guid.NewGuid():N}",
+        Number = status == InvoiceStatus.Draft ? null : $"T-{Guid.NewGuid():N}",
+        Type = type,
         SenderName = "Test Sender",
         SenderAddress = "Musterstraße 1",
         RecipientName = recipient,
         RecipientAddress = "Testweg 5",
         IssueDate = issueDate,
-        DueDate = issueDate.AddDays(14),
+        DueDate = dueDate ?? issueDate.AddDays(14),
         Status = status,
         TotalAmount = totalAmount,
         PaidAt = paidAt,
