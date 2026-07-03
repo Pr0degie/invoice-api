@@ -73,7 +73,7 @@ GET    /api/invoices                — list (filter: ?status=Paid&page=1&pageSi
 GET    /api/invoices/stats          — dashboard KPIs (?from=<iso>&to=<iso>)
 GET    /api/invoices/{id}           — get single invoice
 PUT    /api/invoices/{id}           — edit invoice (drafts only, 409 otherwise)
-POST   /api/invoices/{id}/finalize  — assign number, snapshot tax data, archive PDF (drafts only)
+POST   /api/invoices/{id}/finalize  — stamp issue date (today, or optional past { issueDate }), assign number, snapshot tax data, archive PDF (drafts only)
 POST   /api/invoices/{id}/cancel    — create a Stornorechnung, original becomes Cancelled (finalized only)
 PATCH  /api/invoices/{id}/status    — mark paid / undo (Finalized ⇄ Paid only)
 GET    /api/invoices/{id}/pdf       — download PDF (archived copy once finalized)
@@ -146,7 +146,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-89 unit tests covering service logic, totals, number generation, finalize/cancel lifecycle, PDF archiving, user isolation, stats aggregation, and auth flows.
+95 unit tests covering service logic, totals, number generation, finalize/cancel lifecycle (incl. issue-date stamping), PDF archiving, user isolation, stats aggregation, and auth flows.
 
 ---
 
