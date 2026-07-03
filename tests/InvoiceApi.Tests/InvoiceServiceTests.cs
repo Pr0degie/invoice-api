@@ -140,8 +140,13 @@ public class InvoiceServiceTests : IDisposable
     {
         await SeedCompleteUser();
 
-        var overdue = await _sut.CreateAsync(BuildRequest() with { DueDate = Today.AddDays(-1) });
-        await _sut.FinalizeAsync(overdue.Id);
+        // Finalized with a back-dated Ausstellungsdatum so the shifted DueDate is past
+        var overdue = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = Today.AddDays(-15),
+            DueDate = Today.AddDays(-1), // 14-day span
+        });
+        await _sut.FinalizeAsync(overdue.Id, issueDate: Today.AddDays(-15));
 
         var current = await _sut.CreateAsync(BuildRequest() with { DueDate = Today.AddDays(30) });
         await _sut.FinalizeAsync(current.Id);
@@ -244,20 +249,20 @@ public class InvoiceServiceTests : IDisposable
     public async Task FinalizeAsync_ShouldResetCounterPerYear()
     {
         await SeedCompleteUser();
-        var year = Today.Year;
+        var year = LocalToday.Year;
+
+        var lastYear = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = new DateOnly(year - 1, 12, 1),
+            DueDate = new DateOnly(year - 1, 12, 15),
+        });
+        var older = await _sut.FinalizeAsync(lastYear.Id, issueDate: new DateOnly(year - 1, 12, 20));
 
         var thisYear = await _sut.CreateAsync(BuildRequest());
-        await _sut.FinalizeAsync(thisYear.Id);
+        var finalized = await _sut.FinalizeAsync(thisYear.Id);
 
-        var nextYear = await _sut.CreateAsync(BuildRequest() with
-        {
-            IssueDate = new DateOnly(year + 1, 1, 5),
-            DueDate = new DateOnly(year + 1, 1, 19),
-        });
-
-        var finalized = await _sut.FinalizeAsync(nextYear.Id);
-
-        finalized.Number.Should().Be($"{year + 1}-001");
+        older.Number.Should().Be($"{year - 1}-001");
+        finalized.Number.Should().Be($"{year}-001");
     }
 
     [Fact]
@@ -405,6 +410,102 @@ public class InvoiceServiceTests : IDisposable
         finalized.Subtotal.Should().Be(210m);
         finalized.TaxAmount.Should().Be(39.90m);
         finalized.Total.Should().Be(249.90m);
+    }
+
+    // ── Finalize: Ausstellungsdatum ─────────────────────────────────────────
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldSetIssueDateToToday_ByDefault()
+    {
+        await SeedCompleteUser();
+        // Stale draft: created two weeks ago, never finalized
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = LocalToday.AddDays(-14),
+            DueDate = LocalToday,
+        });
+
+        var finalized = await _sut.FinalizeAsync(draft.Id);
+
+        finalized.IssueDate.Should().Be(LocalToday);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldRespectExplicitIssueDate()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest());
+        var explicitDate = LocalToday.AddDays(-3);
+
+        var finalized = await _sut.FinalizeAsync(draft.Id, issueDate: explicitDate);
+
+        finalized.IssueDate.Should().Be(explicitDate);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldRejectFutureIssueDate()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest());
+
+        var act = () => _sut.FinalizeAsync(draft.Id, issueDate: LocalToday.AddDays(1));
+
+        (await act.Should().ThrowAsync<ValidationException>())
+            .Which.Message.Should().Contain("future");
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldShiftDueDate_PreservingPaymentTermSpan()
+    {
+        await SeedCompleteUser();
+        // 14-day payment terms on a two-week-old draft: due today if left as-is
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = LocalToday.AddDays(-14),
+            DueDate = LocalToday,
+        });
+
+        var finalized = await _sut.FinalizeAsync(draft.Id);
+
+        finalized.IssueDate.Should().Be(LocalToday);
+        finalized.DueDate.Should().Be(LocalToday.AddDays(14));
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldClampDueDate_WhenDraftDueDateBeforeIssueDate()
+    {
+        await SeedCompleteUser();
+        // DueDate edited to an absolute date before the draft's IssueDate → span clamps to 0
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = LocalToday.AddDays(-2),
+            DueDate = LocalToday.AddDays(-5),
+        });
+
+        var finalized = await _sut.FinalizeAsync(draft.Id);
+
+        finalized.IssueDate.Should().Be(LocalToday);
+        finalized.DueDate.Should().Be(LocalToday);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_NumberYear_ShouldFollowFinalIssueDate()
+    {
+        await SeedCompleteUser();
+        // Draft from December, finalized in January → number belongs to the new year
+        var december = new DateOnly(LocalToday.Year - 1, 12, 15);
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            IssueDate = december,
+            DueDate = december.AddDays(14),
+        });
+
+        var january = new DateOnly(LocalToday.Year, 1, 1);
+        var finalized = await _sut.FinalizeAsync(draft.Id, issueDate: january);
+
+        finalized.Number.Should().Be($"{LocalToday.Year}-001");
+        finalized.IssueDate.Should().Be(january);
+        finalized.DueDate.Should().Be(january.AddDays(14));
     }
 
     // ── Status workflow ─────────────────────────────────────────────────────
@@ -722,6 +823,9 @@ public class InvoiceServiceTests : IDisposable
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+
+    // FinalizeAsync stamps dates with the local calendar day (DateTime.Today)
+    private static DateOnly LocalToday => DateOnly.FromDateTime(DateTime.Today);
 
     private InvoiceService ServiceFor(Guid userId)
         => new(_db, new FakeCurrentUserService(userId), new FakePdfService());

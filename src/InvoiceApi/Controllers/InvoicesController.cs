@@ -4,6 +4,7 @@ using InvoiceApi.Models.Dtos.Stats;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
@@ -104,13 +105,19 @@ public class InvoicesController(
     /// Requires a complete sender tax profile (address + Steuernummer or USt-IdNr.)
     /// and a service date/period on the invoice — 409 otherwise. Afterwards the
     /// invoice is immutable; corrections go through Storno + new invoice.
+    /// The optional body sets the Ausstellungsdatum (default: today; future dates
+    /// → 400). The due date shifts to keep the draft's payment-term span.
     /// </remarks>
     [HttpPost("{id:guid}/finalize")]
     [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Finalize(Guid id, CancellationToken ct)
-        => Ok(await invoices.FinalizeAsync(id, ct));
+    public async Task<IActionResult> Finalize(
+        Guid id,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] FinalizeInvoiceRequest? request,
+        CancellationToken ct)
+        => Ok(await invoices.FinalizeAsync(id, request?.IssueDate, ct));
 
     /// <summary>Cancel a finalized invoice by issuing a Stornorechnung.</summary>
     /// <remarks>

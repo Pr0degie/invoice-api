@@ -12,7 +12,7 @@ public interface IInvoiceService
     Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, bool overdueOnly, int page, int pageSize, string? search = null, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default);
-    Task<InvoiceResponse> FinalizeAsync(Guid id, CancellationToken ct = default);
+    Task<InvoiceResponse> FinalizeAsync(Guid id, DateOnly? issueDate = null, CancellationToken ct = default);
     Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
@@ -206,9 +206,13 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         return invoice.ToResponse();
     }
 
-    public async Task<InvoiceResponse> FinalizeAsync(Guid id, CancellationToken ct = default)
+    public async Task<InvoiceResponse> FinalizeAsync(Guid id, DateOnly? issueDate = null, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        if (issueDate > today)
+            throw new ValidationException("The issue date must not be in the future.");
 
         var invoice = await db.Invoices
             .Include(i => i.LineItems)
@@ -224,6 +228,15 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var user = await db.Users.FindAsync([userId], ct)
             ?? throw new UnauthorizedException("User not found.");
         EnsureSenderProfileComplete(user);
+
+        // Ausstellungsdatum is the finalization date, not the draft's creation date —
+        // a stale draft date would become the legal issue date on the archived PDF.
+        // Payment terms travel with it: the draft's DueDate−IssueDate span (never
+        // negative) is re-applied relative to the new IssueDate. Must happen before
+        // AssignNumberAndSaveAsync — the invoice-number year derives from IssueDate.
+        var paymentTermDays = Math.Max(0, invoice.DueDate.DayNumber - invoice.IssueDate.DayNumber);
+        invoice.IssueDate = issueDate ?? today;
+        invoice.DueDate = invoice.IssueDate.AddDays(paymentTermDays);
 
         // § 19 UStG: Kleinunternehmer invoices carry no VAT — enforced here, at the
         // legal fixation point, regardless of what the draft contained.

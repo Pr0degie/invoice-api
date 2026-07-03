@@ -36,6 +36,14 @@ public record UpdateStatusRequest
     [Required] public InvoiceStatus Status { get; init; }
 }
 
+// Body of POST /api/invoices/{id}/finalize — entirely optional (no body = defaults).
+public record FinalizeInvoiceRequest
+{
+    // Ausstellungsdatum for the finalized invoice. Defaults to today; future dates
+    // are rejected (400). The invoice-number year derives from this date.
+    public DateOnly? IssueDate { get; init; }
+}
+
 public record InvoiceResponse(
     Guid Id,
     string? Number,          // null while Draft
