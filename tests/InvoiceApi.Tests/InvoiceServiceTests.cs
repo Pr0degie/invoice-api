@@ -802,6 +802,248 @@ public class InvoiceServiceTests : IDisposable
         updated.UpdatedAt.Should().BeAfter(originalCreatedAt);
     }
 
+    // ── Line item order ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CreateAsync_ShouldPreserveLineItemOrder_RoundTrip()
+    {
+        // Deliberately not alphabetically or price-sorted input
+        var created = await _sut.CreateAsync(BuildRequest() with
+        {
+            LineItems =
+            [
+                new() { Description = "Zebra", Quantity = 1, UnitPrice = 10m, Unit = "h" },
+                new() { Description = "Apfel", Quantity = 2, UnitPrice = 300m, Unit = "flat" },
+                new() { Description = "Mango", Quantity = 3, UnitPrice = 5m, Unit = "day" },
+            ]
+        });
+
+        var fetched = await _sut.GetAsync(created.Id);
+
+        fetched.LineItems.Select(li => li.Description)
+            .Should().ContainInOrder("Zebra", "Apfel", "Mango");
+
+        var stored = await _db.LineItems.Where(li => li.InvoiceId == created.Id).ToListAsync();
+        stored.OrderBy(li => li.Position).Select(li => li.Description)
+            .Should().ContainInOrder("Zebra", "Apfel", "Mango");
+        stored.Select(li => li.Position).Should().BeEquivalentTo([0, 1, 2]);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldSortLineItemsByPosition_NotInsertionOrder()
+    {
+        var created = await _sut.CreateAsync(BuildRequest() with
+        {
+            LineItems = [new() { Description = "Only", Quantity = 1, UnitPrice = 10m, Unit = "h" }]
+        });
+
+        // Simulate arbitrary DB return order: insert extra items with positions
+        // that contradict insertion order.
+        _db.LineItems.AddRange(
+            new LineItem { InvoiceId = created.Id, Description = "Third", Quantity = 1, UnitPrice = 1m, Unit = "h", Position = 2 },
+            new LineItem { InvoiceId = created.Id, Description = "Second", Quantity = 1, UnitPrice = 1m, Unit = "h", Position = 1 });
+        await _db.SaveChangesAsync();
+
+        var fetched = await _sut.GetAsync(created.Id);
+
+        fetched.LineItems.Select(li => li.Description)
+            .Should().ContainInOrder("Only", "Second", "Third");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldPreserveLineItemOrder()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+
+        await _sut.UpdateAsync(created.Id, BuildRequest() with
+        {
+            LineItems =
+            [
+                new() { Description = "Neu C", Quantity = 1, UnitPrice = 30m, Unit = "h" },
+                new() { Description = "Neu A", Quantity = 1, UnitPrice = 10m, Unit = "h" },
+                new() { Description = "Neu B", Quantity = 1, UnitPrice = 20m, Unit = "h" },
+            ]
+        });
+
+        var fetched = await _sut.GetAsync(created.Id);
+
+        fetched.LineItems.Select(li => li.Description)
+            .Should().ContainInOrder("Neu C", "Neu A", "Neu B");
+    }
+
+    [Fact]
+    public async Task CancelAsync_ShouldPreserveLineItemOrder_OnStorno()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            LineItems =
+            [
+                new() { Description = "Zebra", Quantity = 1, UnitPrice = 10m, Unit = "h" },
+                new() { Description = "Apfel", Quantity = 2, UnitPrice = 300m, Unit = "flat" },
+            ]
+        });
+        await _sut.FinalizeAsync(draft.Id);
+
+        var storno = await _sut.CancelAsync(draft.Id);
+
+        storno.LineItems.Select(li => li.Description)
+            .Should().ContainInOrder("Zebra", "Apfel");
+    }
+
+    // ── Reopen (ADR 0003) ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ReopenAsync_ShouldResetToDraft_KeepingNumberAndSequence()
+    {
+        var id = await CreateFinalized();
+        var numberBefore = (await _sut.GetAsync(id)).Number;
+        var counterBefore = await SequenceCounter();
+
+        var reopened = await _sut.ReopenAsync(id);
+
+        reopened.Status.Should().Be(InvoiceStatus.Draft);
+        reopened.Number.Should().Be(numberBefore);
+        (await SequenceCounter()).Should().Be(counterBefore);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldDiscardArchivedPdf()
+    {
+        var id = await CreateFinalized();
+        (await _db.InvoicePdfs.FindAsync(id)).Should().NotBeNull();
+
+        await _sut.ReopenAsync(id);
+
+        (await _db.InvoicePdfs.FindAsync(id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldWriteAuditEntry()
+    {
+        var id = await CreateFinalized();
+
+        await _sut.ReopenAsync(id);
+
+        var entries = await _db.InvoiceAuditEntries.Where(e => e.InvoiceId == id).ToListAsync();
+        entries.Should().ContainSingle();
+        entries[0].Action.Should().Be(InvoiceAuditActions.Reopened);
+        entries[0].UserId.Should().Be(_userId);
+        entries[0].Note.Should().Contain($"{Today.Year}-001");
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldAllowEditingAfterwards()
+    {
+        var id = await CreateFinalized();
+        await _sut.ReopenAsync(id);
+
+        var updated = await _sut.UpdateAsync(id, BuildRequest() with { RecipientName = "Korrigiert GmbH" });
+
+        updated.RecipientName.Should().Be("Korrigiert GmbH");
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldThrowValidation_ForDraft()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest());
+
+        var act = () => _sut.ReopenAsync(draft.Id);
+
+        await act.Should().ThrowAsync<ValidationException>();
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldThrowConflict_ForPaid()
+    {
+        var id = await CreateFinalized();
+        await _sut.UpdateStatusAsync(id, InvoiceStatus.Paid);
+
+        var act = () => _sut.ReopenAsync(id);
+
+        (await act.Should().ThrowAsync<ConflictException>())
+            .Which.Message.Should().Contain("Storno");
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldThrowConflict_ForCancelled()
+    {
+        var id = await CreateFinalized();
+        await _sut.CancelAsync(id);
+
+        var act = () => _sut.ReopenAsync(id);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldThrowConflict_ForCancellationInvoice()
+    {
+        var id = await CreateFinalized();
+        var storno = await _sut.CancelAsync(id);
+
+        var act = () => _sut.ReopenAsync(storno.Id);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldThrowNotFound_ForOtherUsersInvoice()
+    {
+        var id = await CreateFinalized();
+
+        var userBService = ServiceFor(Guid.NewGuid());
+        var act = () => userBService.ReopenAsync(id);
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_AfterReopen_ShouldReuseNumber_WithoutSequenceIncrement()
+    {
+        var id = await CreateFinalized();
+        var numberBefore = (await _sut.GetAsync(id)).Number;
+        var counterBefore = await SequenceCounter();
+
+        await _sut.ReopenAsync(id);
+        var refinalized = await _sut.FinalizeAsync(id);
+
+        refinalized.Status.Should().Be(InvoiceStatus.Finalized);
+        refinalized.Number.Should().Be(numberBefore);
+        (await SequenceCounter()).Should().Be(counterBefore);
+
+        // The next fresh invoice continues the sequence without gap or collision
+        var next = await _sut.CreateAsync(BuildRequest());
+        (await _sut.FinalizeAsync(next.Id)).Number.Should().Be($"{Today.Year}-002");
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_AfterReopen_ShouldArchiveFreshPdf()
+    {
+        var id = await CreateFinalized();
+        await _sut.ReopenAsync(id);
+        (await _db.InvoicePdfs.FindAsync(id)).Should().BeNull();
+
+        await _sut.FinalizeAsync(id);
+
+        var archived = await _db.InvoicePdfs.FindAsync(id);
+        archived.Should().NotBeNull();
+        archived!.Data.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ShouldThrowConflict_ForReopenedDraftWithNumber()
+    {
+        var id = await CreateFinalized();
+        await _sut.ReopenAsync(id);
+
+        var act = () => _sut.DeleteAsync(id);
+
+        (await act.Should().ThrowAsync<ConflictException>())
+            .Which.Message.Should().Contain("number");
+    }
+
     // ── Serialization ───────────────────────────────────────────────────────
 
     [Fact]
@@ -829,6 +1071,9 @@ public class InvoiceServiceTests : IDisposable
 
     private InvoiceService ServiceFor(Guid userId)
         => new(_db, new FakeCurrentUserService(userId), new FakePdfService());
+
+    private async Task<int> SequenceCounter()
+        => (await _db.InvoiceNumberSequences.FindAsync(_userId, Today.Year))?.Counter ?? 0;
 
     private async Task<Guid> CreateFinalized()
     {

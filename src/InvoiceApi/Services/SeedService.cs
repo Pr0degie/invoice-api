@@ -103,13 +103,14 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, IPdfService pd
             int dueDays = 14)
         {
             var issue = today.AddMonths(-monthsAgo).AddDays(-daysAgo);
-            var lineItems = items.Select(i => new LineItem
+            var lineItems = items.Select((i, index) => new LineItem
             {
                 Id = Guid.NewGuid(),
                 Description = i.Desc,
                 Quantity = i.Qty,
                 UnitPrice = i.Price,
-                Unit = i.Unit
+                Unit = i.Unit,
+                Position = index
             }).ToList();
 
             // Kleinunternehmer demo: no VAT anywhere (§ 19 UStG)
@@ -228,7 +229,8 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, IPdfService pd
                 Description = li.Description,
                 Quantity = -li.Quantity,
                 UnitPrice = li.UnitPrice,
-                Unit = li.Unit
+                Unit = li.Unit,
+                Position = li.Position
             }).ToList(),
             TotalAmount = -cancelled.TotalAmount,
             CreatedAt = new DateTimeOffset(stornoIssue.Year, stornoIssue.Month, stornoIssue.Day, 9, 0, 0, TimeSpan.Zero),

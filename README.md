@@ -74,6 +74,7 @@ GET    /api/invoices/stats          — dashboard KPIs (?from=<iso>&to=<iso>)
 GET    /api/invoices/{id}           — get single invoice
 PUT    /api/invoices/{id}           — edit invoice (drafts only, 409 otherwise)
 POST   /api/invoices/{id}/finalize  — stamp issue date (today, or optional past { issueDate }), assign number, snapshot tax data, archive PDF (drafts only)
+POST   /api/invoices/{id}/reopen    — reset Finalized → Draft for pre-dispatch corrections (audited, number retained; re-finalize reuses it)
 POST   /api/invoices/{id}/cancel    — create a Stornorechnung, original becomes Cancelled (finalized only)
 PATCH  /api/invoices/{id}/status    — mark paid / undo (Finalized ⇄ Paid only)
 GET    /api/invoices/{id}/pdf       — download PDF (archived copy once finalized)
@@ -146,7 +147,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-95 unit tests covering service logic, totals, number generation, finalize/cancel lifecycle (incl. issue-date stamping), PDF archiving, user isolation, stats aggregation, and auth flows.
+111 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF archiving, audit trail, user isolation, stats aggregation, and auth flows.
 
 ---
 
@@ -183,7 +184,7 @@ DB migrations run automatically on startup.
 
 ## Notes
 
-Invoice numbers are assigned at finalization — sequential per user and calendar year (`2026-001`), never reused. The sequence lives in the `InvoiceNumberSequences` table with the counter as an EF concurrency token, plus a unique `(UserId, Number)` index as a backstop. Drafts carry no number until finalized.
+Invoice numbers are assigned at finalization — sequential per user and calendar year (`2026-001`), never reused for another invoice. The sequence lives in the `InvoiceNumberSequences` table with the counter as an EF concurrency token, plus a unique `(UserId, Number)` index as a backstop. Drafts carry no number until finalized; a reopened invoice keeps its number and re-finalizing reuses it without touching the sequence (ADR 0003).
 
 QuestPDF is used under the Community License — free for open source projects and commercial use below $1M annual revenue.
 

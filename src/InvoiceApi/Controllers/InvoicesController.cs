@@ -119,6 +119,24 @@ public class InvoicesController(
         CancellationToken ct)
         => Ok(await invoices.FinalizeAsync(id, request?.IssueDate, ct));
 
+    /// <summary>Reopen a finalized invoice: reset it to Draft for corrections before dispatch.</summary>
+    /// <remarks>
+    /// Deliberate, audited exception to invoice immutability (ADR 0003) — intended
+    /// ONLY for invoices that have not been sent to the recipient yet. The invoice
+    /// keeps its assigned number (re-finalizing reuses it; the number sequence is
+    /// untouched), the archived PDF is discarded and re-archived at re-finalization,
+    /// and an append-only audit entry records the reopening (GoBD). Already-sent
+    /// invoices are corrected via Storno instead. 400 if the invoice is a draft;
+    /// 409 for Paid, Cancelled and Cancellation invoices.
+    /// </remarks>
+    [HttpPost("{id:guid}/reopen")]
+    [ProducesResponseType<InvoiceResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Reopen(Guid id, CancellationToken ct)
+        => Ok(await invoices.ReopenAsync(id, ct));
+
     /// <summary>Cancel a finalized invoice by issuing a Stornorechnung.</summary>
     /// <remarks>
     /// Creates a Cancellation invoice (own sequential number, negative amounts,
@@ -162,7 +180,7 @@ public class InvoicesController(
         var userId = currentUser.CurrentUserId;
 
         var invoice = await db.Invoices
-            .Include(i => i.LineItems)
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct);
 
         if (invoice is null)

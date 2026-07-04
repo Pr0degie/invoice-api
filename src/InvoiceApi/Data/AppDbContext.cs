@@ -11,6 +11,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<InvoicePdf> InvoicePdfs => Set<InvoicePdf>();
     public DbSet<InvoiceNumberSequence> InvoiceNumberSequences => Set<InvoiceNumberSequence>();
+    public DbSet<InvoiceAuditEntry> InvoiceAuditEntries => Set<InvoiceAuditEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -88,6 +89,20 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasOne(x => x.Invoice)
              .WithOne()
              .HasForeignKey<InvoicePdf>(x => x.InvoiceId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<InvoiceAuditEntry>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Action).IsRequired().HasMaxLength(50);
+            e.Property(x => x.Note).HasMaxLength(500);
+            e.HasIndex(x => new { x.InvoiceId, x.Timestamp });
+            // No navigation on Invoice — the trail is queried on its own. Cascade is
+            // safe: numbered invoices (the only ones with entries) cannot be deleted.
+            e.HasOne<Invoice>()
+             .WithMany()
+             .HasForeignKey(x => x.InvoiceId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 

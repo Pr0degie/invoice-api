@@ -70,6 +70,10 @@ public class LineItem
     public decimal UnitPrice { get; set; }
     public string Unit { get; set; } = "h"; // h, piece, day, flat, ...
 
+    // Zero-based input order. The PK is a Guid, so without this column the items
+    // come back from the DB in arbitrary order — every read path sorts by Position.
+    public int Position { get; set; }
+
     public decimal Total => Math.Round(Quantity * UnitPrice, 2);
 }
 
@@ -102,6 +106,24 @@ public class InvoicePdf
     public Invoice Invoice { get; set; } = null!;
     public byte[] Data { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+// Append-only GoBD audit trail for exceptional state transitions — currently the
+// reopening of a finalized invoice (ADR 0003). Application code only ever inserts
+// rows; entries are never updated or deleted.
+public class InvoiceAuditEntry
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid InvoiceId { get; set; }
+    public Guid UserId { get; set; }
+    public string Action { get; set; } = default!;
+    public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
+    public string? Note { get; set; }
+}
+
+public static class InvoiceAuditActions
+{
+    public const string Reopened = "Reopened";
 }
 
 // Per-user, per-year invoice number counter. Counter doubles as the concurrency

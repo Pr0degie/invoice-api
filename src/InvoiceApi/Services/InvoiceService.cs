@@ -13,6 +13,7 @@ public interface IInvoiceService
     Task<InvoiceResponse> UpdateAsync(Guid id, CreateInvoiceRequest request, CancellationToken ct = default);
     Task<InvoiceResponse> UpdateStatusAsync(Guid id, InvoiceStatus newStatus, CancellationToken ct = default);
     Task<InvoiceResponse> FinalizeAsync(Guid id, DateOnly? issueDate = null, CancellationToken ct = default);
+    Task<InvoiceResponse> ReopenAsync(Guid id, CancellationToken ct = default);
     Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
@@ -30,12 +31,13 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
 
         ValidateServiceDates(req);
 
-        var lineItems = req.LineItems.Select(li => new LineItem
+        var lineItems = req.LineItems.Select((li, index) => new LineItem
         {
             Description = li.Description,
             Quantity = li.Quantity,
             UnitPrice = li.UnitPrice,
-            Unit = li.Unit
+            Unit = li.Unit,
+            Position = index
         }).ToList();
 
         var subtotal = lineItems.Sum(li => li.Total);
@@ -70,7 +72,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var userId = currentUser.CurrentUserId;
 
         var invoice = await db.Invoices
-            .Include(i => i.LineItems)
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
@@ -87,7 +89,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
     public async Task<List<InvoiceResponse>> ListAsync(InvoiceStatus? status, bool overdueOnly, int page, int pageSize, string? search = null, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
-        var query = db.Invoices.Include(i => i.LineItems).Where(i => i.UserId == userId);
+        var query = db.Invoices.Include(i => i.LineItems.OrderBy(li => li.Position)).Where(i => i.UserId == userId);
 
         if (status.HasValue)
             query = query.Where(i => i.Status == status.Value);
@@ -148,13 +150,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var old = await db.LineItems.Where(li => li.InvoiceId == id).ToListAsync(ct);
         db.LineItems.RemoveRange(old);
 
-        var newItems = req.LineItems.Select(li => new LineItem
+        var newItems = req.LineItems.Select((li, index) => new LineItem
         {
             InvoiceId = id,
             Description = li.Description,
             Quantity = li.Quantity,
             Unit = li.Unit,
-            UnitPrice = li.UnitPrice
+            UnitPrice = li.UnitPrice,
+            Position = index
         }).ToList();
         db.LineItems.AddRange(newItems);
 
@@ -183,7 +186,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var userId = currentUser.CurrentUserId;
 
         var invoice = await db.Invoices
-            .Include(i => i.LineItems)
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
@@ -215,7 +218,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             throw new ValidationException("The issue date must not be in the future.");
 
         var invoice = await db.Invoices
-            .Include(i => i.LineItems)
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
@@ -251,13 +254,58 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         return invoice.ToResponse();
     }
 
+    // Deliberate, audited exception to invoice immutability (ADR 0003): a finalized
+    // invoice that has NOT yet reached the recipient may be reset to Draft for
+    // correction. The assigned number stays on the invoice and the sequence is
+    // untouched — re-finalization reuses the number, so numbering stays gap-free.
+    // Sent/booked documents are corrected via Storno + new invoice, never reopened.
+    public async Task<InvoiceResponse> ReopenAsync(Guid id, CancellationToken ct = default)
+    {
+        var userId = currentUser.CurrentUserId;
+
+        var invoice = await db.Invoices
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
+            ?? throw new NotFoundException($"Invoice {id} not found.");
+
+        if (invoice.Type == InvoiceType.Cancellation)
+            throw new ConflictException("Cancellation invoices cannot be reopened.");
+
+        if (invoice.Status == InvoiceStatus.Draft)
+            throw new ValidationException("The invoice is already a draft.");
+
+        if (invoice.Status != InvoiceStatus.Finalized)
+            throw new ConflictException(
+                $"Cannot reopen a {invoice.Status} invoice — corrections go through Storno + new invoice.");
+
+        invoice.Status = InvoiceStatus.Draft;
+        invoice.UpdatedAt = DateTimeOffset.UtcNow;
+
+        // The archived PDF no longer represents the (now mutable) draft — discard it.
+        // A fresh render is archived at re-finalization.
+        var archived = await db.InvoicePdfs.FindAsync([invoice.Id], ct);
+        if (archived is not null)
+            db.InvoicePdfs.Remove(archived);
+
+        db.InvoiceAuditEntries.Add(new InvoiceAuditEntry
+        {
+            InvoiceId = invoice.Id,
+            UserId = userId,
+            Action = InvoiceAuditActions.Reopened,
+            Note = $"Invoice {invoice.Number} reset to draft for pre-dispatch correction; number retained."
+        });
+
+        await db.SaveChangesAsync(ct);
+        return invoice.ToResponse();
+    }
+
     public async Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
         var today = DateOnly.FromDateTime(DateTime.Today);
 
         var invoice = await db.Invoices
-            .Include(i => i.LineItems)
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
             .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct)
             ?? throw new NotFoundException($"Invoice {id} not found.");
 
@@ -296,7 +344,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
                 Description = li.Description,
                 Quantity = -li.Quantity,
                 UnitPrice = li.UnitPrice,
-                Unit = li.Unit
+                Unit = li.Unit,
+                Position = li.Position
             }).ToList(),
         };
         storno.TotalAmount = storno.Total;
@@ -320,6 +369,13 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
 
         if (invoice.Status != InvoiceStatus.Draft)
             throw new ConflictException("Only draft invoices can be deleted.");
+
+        // A reopened draft still owns its issued number. Deleting it would tear a
+        // gap into the sequence (ADR 0002: numbers are never reused) — the only way
+        // forward is re-finalizing (and cancelling via Storno if needed).
+        if (invoice.Number is not null)
+            throw new ConflictException(
+                "This draft was finalized before and keeps its invoice number — it cannot be deleted. Re-finalize it (and cancel via Storno if needed).");
 
         db.Invoices.Remove(invoice);
         await db.SaveChangesAsync(ct);
@@ -355,14 +411,22 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
     // Assigns the next sequential number to a Finalized invoice, renders and stores
     // its PDF, and saves everything in one SaveChanges (one DB transaction). Retries
     // on sequence-counter races and unique-index violations.
+    // A re-finalized invoice (reopened via ReopenAsync) already owns its number:
+    // it is reused verbatim, the sequence stays untouched, and no retry is needed —
+    // the unique (UserId, Number) slot is already ours.
     private async Task AssignNumberAndSaveAsync(Invoice invoice, User user, CancellationToken ct)
     {
         var year = invoice.IssueDate.Year;
-        InvoicePdf? archived = null;
+        var keepExistingNumber = invoice.Number is not null;
+
+        // Usually null (reopen discards the archive), but overwrite defensively —
+        // the archived PDF must always show the finalized state being saved here.
+        var archived = await db.InvoicePdfs.FindAsync([invoice.Id], ct);
 
         for (var attempt = 1; ; attempt++)
         {
-            invoice.Number = await ReserveNumberAsync(invoice.UserId, year, ct);
+            if (!keepExistingNumber)
+                invoice.Number = await ReserveNumberAsync(invoice.UserId, year, ct);
 
             var bytes = pdf.Generate(invoice, user);
             if (archived is null)
@@ -372,7 +436,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             }
             else
             {
-                archived.Data = bytes; // retry: re-render with the fresh number
+                archived.Data = bytes; // retry or re-finalize: replace with current render
+                archived.CreatedAt = DateTimeOffset.UtcNow;
             }
 
             try
@@ -380,7 +445,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
                 await db.SaveChangesAsync(ct);
                 return;
             }
-            catch (DbUpdateException) when (attempt < MaxNumberingAttempts)
+            catch (DbUpdateException) when (!keepExistingNumber && attempt < MaxNumberingAttempts)
             {
                 // Lost the race (concurrency token or unique index). Drop our stale
                 // view of the sequence row and try again with the next number.
@@ -433,7 +498,7 @@ internal static class InvoiceMappings
             i.Subtotal,
             i.TaxAmount,
             i.Total,
-            i.LineItems.Select(li => new LineItemResponse(
+            i.LineItems.OrderBy(li => li.Position).Select(li => new LineItemResponse(
                 li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total
             )).ToList(),
             i.Notes,

@@ -93,9 +93,12 @@ public class PdfService : IPdfService
             {
                 row.RelativeItem().Column(c =>
                 {
-                    c.Item().PaddingBottom(4)
-                        .Text(SenderLine(invoice))
-                        .FontSize(7).Underline().FontColor(MutedColor);
+                    // DIN 5008 Absenderzeile: separated from the recipient by a thin
+                    // rule (same stroke as the footer) instead of a font underline,
+                    // which sat directly on the recipient name.
+                    c.Item().Text(SenderLine(invoice)).FontSize(7).FontColor(MutedColor);
+                    c.Item().PaddingTop(2).PaddingBottom(8)
+                        .LineHorizontal(0.5f).LineColor("#d1d5db");
                     c.Item().Text(invoice.RecipientName).Bold();
                     c.Item().Text(invoice.RecipientAddress).FontSize(9);
                 });
@@ -151,7 +154,7 @@ public class PdfService : IPdfService
                     }
                 });
 
-                foreach (var (item, index) in invoice.LineItems.Select((x, i) => (x, i)))
+                foreach (var (item, index) in invoice.LineItems.OrderBy(li => li.Position).Select((x, i) => (x, i)))
                 {
                     var bg = index % 2 == 0 ? "#ffffff" : "#f8f9fa";
 
