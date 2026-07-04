@@ -34,6 +34,7 @@ public record UserDto(
     string? PostalCode,
     string? City,
     string? Country,
+    string? Phone,
     string? Iban,
     string? Bic,
     string? BankName);
@@ -50,6 +51,7 @@ public record UpdateProfileDto(
     [MaxLength(20)] string? PostalCode = null,
     [MaxLength(100)] string? City = null,
     [MaxLength(100)] string? Country = null,
+    [MaxLength(30)] string? Phone = null,
     [MaxLength(34)] string? Iban = null,
     [MaxLength(11)] string? Bic = null,
     [MaxLength(100)] string? BankName = null);

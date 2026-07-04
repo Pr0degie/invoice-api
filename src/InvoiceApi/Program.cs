@@ -35,6 +35,7 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 builder.Services.AddScoped<IStatsService, StatsService>();
 builder.Services.AddScoped<IPdfService, PdfService>();
+builder.Services.AddScoped<IEInvoiceService, EInvoiceService>();
 builder.Services.AddScoped<SeedService>();
 
 // JWT auth — key presence/strength is validated at startup below; no fallback here

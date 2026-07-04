@@ -23,6 +23,10 @@ public class User
     public string? City { get; set; }
     public string? Country { get; set; }
 
+    // Seller contact telephone (BT-42). Required at finalization for E-Rechnung
+    // (XRechnung BR-DE-2..7 mandate a seller contact with phone).
+    public string? Phone { get; set; }
+
     // Bank details for the PDF footer — optional, not finalization-blocking.
     public string? Iban { get; set; }
     public string? Bic { get; set; }

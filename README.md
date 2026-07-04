@@ -1,6 +1,6 @@
 # invoice-api
 
-REST API for creating invoices and exporting them as PDF — built because every client eventually needs this and the existing solutions are either overpriced SaaS or a mess.
+REST API for creating invoices and exporting them as PDF plus German E-Rechnung (XRechnung / EN 16931) — built because every client eventually needs this and the existing solutions are either overpriced SaaS or a mess.
 
 ![CI](https://github.com/Pr0degie/invoice-api/actions/workflows/ci.yml/badge.svg)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)
@@ -13,6 +13,7 @@ REST API for creating invoices and exporting them as PDF — built because every
 - Create invoices with line items (hourly, flat, per piece, per day)
 - Assigns sequential invoice numbers at finalization (`2026-001`) — per user, per calendar year, never reused; drafts have no number
 - Exports invoices as properly formatted A4 PDFs
+- Generates a legally binding German **E-Rechnung** (XRechnung 3.0 / EN 16931, CII XML) per finalized invoice, archived immutably alongside the PDF (§ 19 → tax category E; Storno → type 384)
 - Track status: Draft → Finalized → Paid, plus Storno (cancellation) invoices — overdue is derived from the due date, not stored
 - Pagination, filtering by status
 - Swagger UI out of the box
@@ -24,6 +25,7 @@ REST API for creating invoices and exporting them as PDF — built because every
 | Runtime | .NET 8 / ASP.NET Core |
 | Database | PostgreSQL + EF Core |
 | PDF | QuestPDF |
+| E-Rechnung | ZUGFeRD-csharp (XRechnung CII) |
 | Logging | Serilog |
 | Tests | xunit + FluentAssertions |
 | Deploy | Docker + Railway |
@@ -73,11 +75,12 @@ GET    /api/invoices                — list (filter: ?status=Paid&page=1&pageSi
 GET    /api/invoices/stats          — dashboard KPIs (?from=<iso>&to=<iso>)
 GET    /api/invoices/{id}           — get single invoice
 PUT    /api/invoices/{id}           — edit invoice (drafts only, 409 otherwise)
-POST   /api/invoices/{id}/finalize  — stamp issue date (today, or optional past { issueDate }), assign number, snapshot tax data, archive PDF (drafts only)
+POST   /api/invoices/{id}/finalize  — stamp issue date (today, or optional past { issueDate }), assign number, snapshot tax data, archive PDF + E-Rechnung XML (drafts only; requires seller phone + structured recipient address & email)
 POST   /api/invoices/{id}/reopen    — reset Finalized → Draft for pre-dispatch corrections (audited, number retained; re-finalize reuses it)
 POST   /api/invoices/{id}/cancel    — create a Stornorechnung, original becomes Cancelled (finalized only)
 PATCH  /api/invoices/{id}/status    — mark paid / undo (Finalized ⇄ Paid only)
 GET    /api/invoices/{id}/pdf       — download PDF (archived copy once finalized)
+GET    /api/invoices/{id}/xml       — download E-Rechnung XML (XRechnung; finalized only, 409 for drafts)
 DELETE /api/invoices/{id}           — delete draft (drafts only, 409 otherwise)
 ```
 
@@ -147,7 +150,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-111 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF archiving, audit trail, user isolation, stats aggregation, and auth flows.
+121 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, and auth flows.
 
 ---
 

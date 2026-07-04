@@ -185,6 +185,7 @@ public class AuthService(
         if (dto.PostalCode is not null) user.PostalCode = NullIfEmpty(dto.PostalCode);
         if (dto.City is not null) user.City = NullIfEmpty(dto.City);
         if (dto.Country is not null) user.Country = NullIfEmpty(dto.Country);
+        if (dto.Phone is not null) user.Phone = NullIfEmpty(dto.Phone);
 
         if (dto.Iban is not null)
         {
@@ -258,6 +259,6 @@ public class AuthService(
         new(user.Id, user.Email, user.Name, user.CreatedAt,
             user.DefaultSenderName, user.DefaultSenderAddress,
             user.TaxNumber, user.VatId, user.IsSmallBusiness,
-            user.Street, user.PostalCode, user.City, user.Country,
+            user.Street, user.PostalCode, user.City, user.Country, user.Phone,
             user.Iban, user.Bic, user.BankName);
 }

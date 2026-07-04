@@ -18,7 +18,7 @@ public interface IInvoiceService
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
-public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IPdfService pdf) : IInvoiceService
+public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IPdfService pdf, IEInvoiceService einvoice) : IInvoiceService
 {
     // Concurrent finalizations race on the sequence counter (concurrency token) or,
     // as a backstop, the unique (UserId, Number) index — losers retry with a fresh number.
@@ -49,7 +49,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             SenderName = req.SenderName,
             SenderAddress = req.SenderAddress,
             RecipientName = req.RecipientName,
-            RecipientAddress = req.RecipientAddress,
+            RecipientAddress = ComposeRecipientAddress(req),
+            RecipientStreet = req.RecipientStreet,
+            RecipientPostalCode = req.RecipientPostalCode,
+            RecipientCity = req.RecipientCity,
+            RecipientCountryCode = req.RecipientCountryCode,
+            RecipientEmail = req.RecipientEmail,
+            RecipientVatId = req.RecipientVatId,
+            BuyerReference = req.BuyerReference,
             IssueDate = req.IssueDate ?? today,
             DueDate = req.DueDate ?? today.AddDays(14),
             ServiceDate = req.ServiceDate,
@@ -136,7 +143,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         invoice.SenderName = req.SenderName;
         invoice.SenderAddress = req.SenderAddress;
         invoice.RecipientName = req.RecipientName;
-        invoice.RecipientAddress = req.RecipientAddress;
+        invoice.RecipientAddress = ComposeRecipientAddress(req);
+        invoice.RecipientStreet = req.RecipientStreet;
+        invoice.RecipientPostalCode = req.RecipientPostalCode;
+        invoice.RecipientCity = req.RecipientCity;
+        invoice.RecipientCountryCode = req.RecipientCountryCode;
+        invoice.RecipientEmail = req.RecipientEmail;
+        invoice.RecipientVatId = req.RecipientVatId;
+        invoice.BuyerReference = req.BuyerReference;
         invoice.IssueDate = req.IssueDate ?? invoice.IssueDate;
         invoice.DueDate = req.DueDate ?? invoice.DueDate;
         invoice.ServiceDate = req.ServiceDate;
@@ -233,6 +247,15 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var user = await db.Users.FindAsync([userId], ct)
             ?? throw new UnauthorizedException("User not found.");
         EnsureSenderProfileComplete(user);
+        EnsureRecipientComplete(invoice);
+
+        // E-Rechnung mandatory defaults (BR-DE-15 buyer reference, buyer country).
+        invoice.BuyerReference = string.IsNullOrWhiteSpace(invoice.BuyerReference)
+            ? "-"
+            : invoice.BuyerReference.Trim();
+        invoice.RecipientCountryCode = string.IsNullOrWhiteSpace(invoice.RecipientCountryCode)
+            ? "DE"
+            : invoice.RecipientCountryCode.Trim().ToUpperInvariant();
 
         // Ausstellungsdatum is the finalization date, not the draft's creation date —
         // a stale draft date would become the legal issue date on the archived PDF.
@@ -283,11 +306,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         invoice.Status = InvoiceStatus.Draft;
         invoice.UpdatedAt = DateTimeOffset.UtcNow;
 
-        // The archived PDF no longer represents the (now mutable) draft — discard it.
-        // A fresh render is archived at re-finalization.
+        // The archived PDF/XML no longer represents the (now mutable) draft — discard
+        // both. A fresh render + XRechnung is archived at re-finalization.
         var archived = await db.InvoicePdfs.FindAsync([invoice.Id], ct);
         if (archived is not null)
             db.InvoicePdfs.Remove(archived);
+        var archivedXml = await db.InvoiceXmls.FindAsync([invoice.Id], ct);
+        if (archivedXml is not null)
+            db.InvoiceXmls.Remove(archivedXml);
 
         db.InvoiceAuditEntries.Add(new InvoiceAuditEntry
         {
@@ -331,6 +357,14 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             SenderAddress = invoice.SenderAddress,
             RecipientName = invoice.RecipientName,
             RecipientAddress = invoice.RecipientAddress,
+            // Storno inherits the original's structured buyer data so its XML validates.
+            RecipientStreet = invoice.RecipientStreet,
+            RecipientPostalCode = invoice.RecipientPostalCode,
+            RecipientCity = invoice.RecipientCity,
+            RecipientCountryCode = invoice.RecipientCountryCode,
+            RecipientEmail = invoice.RecipientEmail,
+            RecipientVatId = invoice.RecipientVatId,
+            BuyerReference = invoice.BuyerReference,
             IssueDate = today,
             DueDate = today,
             ServiceDate = invoice.ServiceDate,
@@ -405,10 +439,44 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         if (string.IsNullOrWhiteSpace(user.PostalCode)) missing.Add("postal code");
         if (string.IsNullOrWhiteSpace(user.City)) missing.Add("city");
         if (string.IsNullOrWhiteSpace(user.Country)) missing.Add("country");
+        // BT-42 seller contact telephone — mandatory for the E-Rechnung (BR-DE-2..7).
+        if (string.IsNullOrWhiteSpace(user.Phone)) missing.Add("phone");
 
         if (missing.Count > 0)
             throw new ConflictException(
                 $"Sender profile incomplete — missing: {string.Join(", ", missing)}. Complete your tax settings first.");
+    }
+
+    // Structured buyer data required for a valid E-Rechnung (XRechnung): buyer
+    // electronic address BT-49 and postal address BR-DE-8/9. Enforced at the legal
+    // fixation point so every finalized invoice can produce compliant XML.
+    private static void EnsureRecipientComplete(Invoice invoice)
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(invoice.RecipientEmail)) missing.Add("recipient email");
+        if (string.IsNullOrWhiteSpace(invoice.RecipientStreet)) missing.Add("recipient street");
+        if (string.IsNullOrWhiteSpace(invoice.RecipientPostalCode)) missing.Add("recipient postal code");
+        if (string.IsNullOrWhiteSpace(invoice.RecipientCity)) missing.Add("recipient city");
+
+        if (missing.Count > 0)
+            throw new ConflictException(
+                $"Recipient data incomplete for E-Rechnung — missing: {string.Join(", ", missing)}. Add the structured recipient address and email.");
+    }
+
+    // The persisted free-text RecipientAddress column (used by the PDF and legacy
+    // invoices) is composed from the structured fields when they're supplied,
+    // falling back to whatever free text the request carried.
+    private static string ComposeRecipientAddress(CreateInvoiceRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.RecipientStreet)
+            && string.IsNullOrWhiteSpace(req.RecipientPostalCode)
+            && string.IsNullOrWhiteSpace(req.RecipientCity))
+            return req.RecipientAddress ?? "";
+
+        var cityLine = $"{req.RecipientPostalCode} {req.RecipientCity}".Trim();
+        var lines = new[] { req.RecipientStreet, cityLine, req.RecipientCountryCode }
+            .Where(p => !string.IsNullOrWhiteSpace(p));
+        return string.Join("\n", lines);
     }
 
     // Assigns the next sequential number to a Finalized invoice, renders and stores
@@ -423,8 +491,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         var keepExistingNumber = invoice.Number is not null;
 
         // Usually null (reopen discards the archive), but overwrite defensively —
-        // the archived PDF must always show the finalized state being saved here.
+        // the archived PDF/XML must always show the finalized state being saved here.
         var archived = await db.InvoicePdfs.FindAsync([invoice.Id], ct);
+        var archivedXml = await db.InvoiceXmls.FindAsync([invoice.Id], ct);
 
         for (var attempt = 1; ; attempt++)
         {
@@ -441,6 +510,20 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             {
                 archived.Data = bytes; // retry or re-finalize: replace with current render
                 archived.CreatedAt = DateTimeOffset.UtcNow;
+            }
+
+            // Archive the legally binding XRechnung XML alongside the PDF — same
+            // upsert + retry semantics; the invoice number is embedded in both.
+            var xmlBytes = einvoice.Generate(invoice, user);
+            if (archivedXml is null)
+            {
+                archivedXml = new InvoiceXml { InvoiceId = invoice.Id, Data = xmlBytes };
+                db.InvoiceXmls.Add(archivedXml);
+            }
+            else
+            {
+                archivedXml.Data = xmlBytes;
+                archivedXml.CreatedAt = DateTimeOffset.UtcNow;
             }
 
             try
@@ -489,6 +572,13 @@ internal static class InvoiceMappings
             i.SenderAddress,
             i.RecipientName,
             i.RecipientAddress,
+            i.RecipientStreet,
+            i.RecipientPostalCode,
+            i.RecipientCity,
+            i.RecipientCountryCode,
+            i.RecipientEmail,
+            i.RecipientVatId,
+            i.BuyerReference,
             i.IssueDate,
             i.DueDate,
             i.ServiceDate,

@@ -99,7 +99,7 @@ public class PdfService : IPdfService
                     c.Item().PaddingTop(2).PaddingBottom(8)
                         .LineHorizontal(0.5f).LineColor("#d1d5db");
                     c.Item().Text(invoice.RecipientName).Bold();
-                    c.Item().Text(invoice.RecipientAddress).FontSize(9);
+                    c.Item().Text(RecipientAddress(invoice)).FontSize(9);
                 });
 
                 row.ConstantItem(220).Column(c =>
@@ -287,6 +287,22 @@ public class PdfService : IPdfService
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Prepend(invoice.SenderName);
         return string.Join(" · ", parts);
+    }
+
+    // Recipient block: prefer the structured fields (street / "postal city" /
+    // country) so the PDF matches the E-Rechnung XML; fall back to the legacy
+    // free-text RecipientAddress for pre-E-Rechnung invoices.
+    private static string RecipientAddress(Invoice invoice)
+    {
+        if (string.IsNullOrWhiteSpace(invoice.RecipientStreet)
+            && string.IsNullOrWhiteSpace(invoice.RecipientPostalCode)
+            && string.IsNullOrWhiteSpace(invoice.RecipientCity))
+            return invoice.RecipientAddress;
+
+        var cityLine = $"{invoice.RecipientPostalCode} {invoice.RecipientCity}".Trim();
+        var lines = new[] { invoice.RecipientStreet, cityLine, invoice.RecipientCountryCode }
+            .Where(p => !string.IsNullOrWhiteSpace(p));
+        return string.Join("\n", lines);
     }
 
     private static string FooterAddress(User user)

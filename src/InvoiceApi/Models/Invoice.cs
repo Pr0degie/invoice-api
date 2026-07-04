@@ -14,7 +14,20 @@ public class Invoice
     public string SenderAddress { get; set; } = default!;
 
     public string RecipientName { get; set; } = default!;
+    // Legacy free-text recipient address — kept for the PDF and pre-E-Rechnung
+    // invoices. New invoices additionally carry the structured fields below, from
+    // which RecipientAddress is composed at create/update time.
     public string RecipientAddress { get; set; } = default!;
+
+    // Structured recipient (buyer) data — required for E-Rechnung (XRechnung).
+    // Nullable so legacy invoices and drafts stay valid; enforced at finalization.
+    public string? RecipientStreet { get; set; }
+    public string? RecipientPostalCode { get; set; }
+    public string? RecipientCity { get; set; }
+    public string? RecipientCountryCode { get; set; } // ISO 3166-1 alpha-2, defaults to "DE" at finalize
+    public string? RecipientEmail { get; set; }       // BT-49 buyer electronic address
+    public string? RecipientVatId { get; set; }        // BT-48 buyer VAT id (optional)
+    public string? BuyerReference { get; set; }        // BT-10 (Leitweg-ID / order ref); defaults to "-" at finalize
 
     public DateOnly IssueDate { get; set; }
     public DateOnly DueDate { get; set; }
@@ -114,6 +127,17 @@ public enum InvoiceType
 // Archived render of a finalized invoice (GoBD: the PDF handed out is the PDF
 // stored — finalized documents are never re-rendered from live data).
 public class InvoicePdf
+{
+    public Guid InvoiceId { get; set; }
+    public Invoice Invoice { get; set; } = null!;
+    public byte[] Data { get; set; } = [];
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+// Archived XRechnung (EN 16931, CII) XML of a finalized invoice — the legally
+// binding structured E-Rechnung. Mirrors InvoicePdf: generated once at
+// finalization and preserved unaltered (GoBD / § 14b), never re-rendered.
+public class InvoiceXml
 {
     public Guid InvoiceId { get; set; }
     public Invoice Invoice { get; set; } = null!;

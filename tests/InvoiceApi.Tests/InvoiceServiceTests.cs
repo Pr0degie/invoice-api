@@ -21,7 +21,7 @@ public class InvoiceServiceTests : IDisposable
             .Options;
 
         _db = new AppDbContext(opts);
-        _sut = new InvoiceService(_db, new FakeCurrentUserService(_userId), new FakePdfService());
+        _sut = new InvoiceService(_db, new FakeCurrentUserService(_userId), new FakePdfService(), new FakeEInvoiceService());
     }
 
     // ── Create ──────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ public class InvoiceServiceTests : IDisposable
         {
             setup.Users.Add(CompleteUser(userId));
             await setup.SaveChangesAsync();
-            var service = new InvoiceService(setup, new FakeCurrentUserService(userId), new FakePdfService());
+            var service = new InvoiceService(setup, new FakeCurrentUserService(userId), new FakePdfService(), new FakeEInvoiceService());
             draftIds = new List<Guid>();
             foreach (var _ in Enumerable.Range(0, 5))
                 draftIds.Add((await service.CreateAsync(BuildRequest())).Id);
@@ -305,7 +305,7 @@ public class InvoiceServiceTests : IDisposable
         var results = await Task.WhenAll(draftIds.Select(async id =>
         {
             await using var ctx = NewContext();
-            var service = new InvoiceService(ctx, new FakeCurrentUserService(userId), new FakePdfService());
+            var service = new InvoiceService(ctx, new FakeCurrentUserService(userId), new FakePdfService(), new FakeEInvoiceService());
             return await service.FinalizeAsync(id);
         }));
 
@@ -376,6 +376,42 @@ public class InvoiceServiceTests : IDisposable
         var archived = await _db.InvoicePdfs.FindAsync(draft.Id);
         archived.Should().NotBeNull();
         archived!.Data.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldArchiveXml()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest());
+
+        await _sut.FinalizeAsync(draft.Id);
+
+        var archived = await _db.InvoiceXmls.FindAsync(draft.Id);
+        archived.Should().NotBeNull();
+        archived!.Data.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ShouldDiscardArchivedXml()
+    {
+        var id = await CreateFinalized();
+        (await _db.InvoiceXmls.FindAsync(id)).Should().NotBeNull();
+
+        await _sut.ReopenAsync(id);
+
+        (await _db.InvoiceXmls.FindAsync(id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShouldThrowConflict_WhenRecipientDataIncomplete()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest() with { RecipientEmail = null });
+
+        var act = () => _sut.FinalizeAsync(draft.Id);
+
+        (await act.Should().ThrowAsync<ConflictException>())
+            .Which.Message.Should().Contain("recipient email");
     }
 
     // ── Finalize: Kleinunternehmer vs. Regelbesteuerung ─────────────────────
@@ -1123,7 +1159,7 @@ public class InvoiceServiceTests : IDisposable
     private static DateOnly LocalToday => DateOnly.FromDateTime(DateTime.Today);
 
     private InvoiceService ServiceFor(Guid userId)
-        => new(_db, new FakeCurrentUserService(userId), new FakePdfService());
+        => new(_db, new FakeCurrentUserService(userId), new FakePdfService(), new FakeEInvoiceService());
 
     private async Task<int> SequenceCounter()
         => (await _db.InvoiceNumberSequences.FindAsync(_userId, Today.Year))?.Counter ?? 0;
@@ -1157,6 +1193,7 @@ public class InvoiceServiceTests : IDisposable
         PostalCode = "80331",
         City = "München",
         Country = "Deutschland",
+        Phone = "+49 89 1234567",
         CreatedAt = DateTime.UtcNow,
         UpdatedAt = DateTime.UtcNow,
     };
@@ -1167,6 +1204,11 @@ public class InvoiceServiceTests : IDisposable
         SenderAddress = "Musterstraße 1, 80331 München",
         RecipientName = "ACME GmbH",
         RecipientAddress = "Testweg 5, 10115 Berlin",
+        RecipientStreet = "Testweg 5",
+        RecipientPostalCode = "10115",
+        RecipientCity = "Berlin",
+        RecipientCountryCode = "DE",
+        RecipientEmail = "rechnung@acme.example",
         TaxRate = 0.19m,
         ServiceDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3),
         LineItems =
@@ -1187,4 +1229,12 @@ internal class FakeCurrentUserService(Guid userId) : ICurrentUserService
 internal class FakePdfService : IPdfService
 {
     public byte[] Generate(Invoice invoice, User user) => [0x25, 0x50, 0x44, 0x46]; // "%PDF"
+}
+
+internal class FakeEInvoiceService : IEInvoiceService
+{
+    // Minimal well-formed XML — enough for archiving tests without pulling in the
+    // real XRechnung generator (exercised separately in EInvoiceServiceTests).
+    public byte[] Generate(Invoice invoice, User user)
+        => System.Text.Encoding.UTF8.GetBytes($"<Invoice><Number>{invoice.Number}</Number></Invoice>");
 }

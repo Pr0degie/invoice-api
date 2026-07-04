@@ -7,7 +7,21 @@ public record CreateInvoiceRequest
     [Required, MinLength(1)] public string SenderName { get; init; } = default!;
     [Required, MinLength(1)] public string SenderAddress { get; init; } = default!;
     [Required, MinLength(1)] public string RecipientName { get; init; } = default!;
-    [Required, MinLength(1)] public string RecipientAddress { get; init; } = default!;
+
+    // Legacy free-text recipient address. Optional now that structured fields exist:
+    // the server composes this column from them when they're provided, so new clients
+    // can leave it empty. Structured fields are enforced at finalization, not here.
+    public string? RecipientAddress { get; init; }
+
+    // Structured recipient (buyer) data for the E-Rechnung (XRechnung).
+    public string? RecipientStreet { get; init; }
+    public string? RecipientPostalCode { get; init; }
+    public string? RecipientCity { get; init; }
+    public string? RecipientCountryCode { get; init; } = "DE"; // ISO 3166-1 alpha-2
+    [EmailAddress] public string? RecipientEmail { get; init; }  // BT-49
+    public string? RecipientVatId { get; init; }                 // BT-48 (optional)
+    public string? BuyerReference { get; init; }                 // BT-10 (defaults to "-" at finalize)
+
     public DateOnly? IssueDate { get; init; }
     public DateOnly? DueDate { get; init; }
 
@@ -57,6 +71,13 @@ public record InvoiceResponse(
     string SenderAddress,
     string RecipientName,
     string RecipientAddress,
+    string? RecipientStreet,
+    string? RecipientPostalCode,
+    string? RecipientCity,
+    string? RecipientCountryCode,
+    string? RecipientEmail,
+    string? RecipientVatId,
+    string? BuyerReference,
     DateOnly IssueDate,
     DateOnly DueDate,
     DateOnly? ServiceDate,

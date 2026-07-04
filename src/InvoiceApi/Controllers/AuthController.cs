@@ -77,7 +77,7 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         return Ok(new UserDto(user.Id, user.Email, user.Name, user.CreatedAt,
             user.DefaultSenderName, user.DefaultSenderAddress,
             user.TaxNumber, user.VatId, user.IsSmallBusiness,
-            user.Street, user.PostalCode, user.City, user.Country,
+            user.Street, user.PostalCode, user.City, user.Country, user.Phone,
             user.Iban, user.Bic, user.BankName));
     }
 

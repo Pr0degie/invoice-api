@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<User> Users => Set<User>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<InvoicePdf> InvoicePdfs => Set<InvoicePdf>();
+    public DbSet<InvoiceXml> InvoiceXmls => Set<InvoiceXml>();
     public DbSet<InvoiceNumberSequence> InvoiceNumberSequences => Set<InvoiceNumberSequence>();
     public DbSet<InvoiceAuditEntry> InvoiceAuditEntries => Set<InvoiceAuditEntry>();
 
@@ -24,6 +25,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.UserId, x.Number }).IsUnique()
              .HasDatabaseName("IX_Invoices_UserId_Number");
             e.Property(x => x.CancellationOfNumber).HasMaxLength(50);
+            // Structured recipient (buyer) data for E-Rechnung — mirrors the
+            // User address column lengths; nullable so drafts/legacy stay valid.
+            e.Property(x => x.RecipientStreet).HasMaxLength(200);
+            e.Property(x => x.RecipientPostalCode).HasMaxLength(20);
+            e.Property(x => x.RecipientCity).HasMaxLength(100);
+            e.Property(x => x.RecipientCountryCode).HasMaxLength(2);
+            e.Property(x => x.RecipientEmail).HasMaxLength(256);
+            e.Property(x => x.RecipientVatId).HasMaxLength(20);
+            e.Property(x => x.BuyerReference).HasMaxLength(50);
             // SetNull so account deletion (user → invoices cascade) never trips over
             // the storno→original link; CancellationOfNumber keeps the reference text.
             e.HasOne<Invoice>()
@@ -78,6 +88,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.Property(x => x.PostalCode).HasMaxLength(20);
             e.Property(x => x.City).HasMaxLength(100);
             e.Property(x => x.Country).HasMaxLength(100);
+            e.Property(x => x.Phone).HasMaxLength(30);
             e.Property(x => x.Iban).HasMaxLength(34);
             e.Property(x => x.Bic).HasMaxLength(11);
             e.Property(x => x.BankName).HasMaxLength(100);
@@ -89,6 +100,15 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             e.HasOne(x => x.Invoice)
              .WithOne()
              .HasForeignKey<InvoicePdf>(x => x.InvoiceId)
+             .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<InvoiceXml>(e =>
+        {
+            e.HasKey(x => x.InvoiceId);
+            e.HasOne(x => x.Invoice)
+             .WithOne()
+             .HasForeignKey<InvoiceXml>(x => x.InvoiceId)
              .OnDelete(DeleteBehavior.Cascade);
         });
 

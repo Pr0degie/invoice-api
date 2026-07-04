@@ -18,6 +18,7 @@ namespace InvoiceApi.Controllers;
 public class InvoicesController(
     IInvoiceService invoices,
     IPdfService pdf,
+    IEInvoiceService einvoice,
     IStatsService stats,
     AppDbContext db,
     ICurrentUserService currentUser) : ControllerBase
@@ -204,6 +205,62 @@ public class InvoicesController(
         }
 
         return File(archived.Data, "application/pdf", $"{invoice.Number}.pdf");
+    }
+
+    /// <summary>Download the invoice as an E-Rechnung (XRechnung / EN 16931 CII XML).</summary>
+    /// <remarks>
+    /// Returns the XML archived at finalization (GoBD — the structured document is
+    /// preserved unaltered). Drafts have no legal E-Rechnung (409). Invoices finalized
+    /// before E-Rechnung support are backfilled on demand, but only when they carry the
+    /// structured recipient data + email and a seller phone; otherwise 409 names what's missing.
+    /// </remarks>
+    [HttpGet("{id:guid}/xml")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DownloadXml(Guid id, CancellationToken ct)
+    {
+        var userId = currentUser.CurrentUserId;
+
+        var invoice = await db.Invoices
+            .Include(i => i.LineItems.OrderBy(li => li.Position))
+            .FirstOrDefaultAsync(i => i.Id == id && i.UserId == userId, ct);
+
+        if (invoice is null)
+            return NotFound(new { error = $"Invoice {id} not found." });
+
+        var user = await db.Users.FindAsync([userId], ct);
+        if (user is null)
+            return NotFound(new { error = "User not found." });
+
+        if (invoice.Status == InvoiceStatus.Draft)
+            return Conflict(new { error = "Drafts have no E-Rechnung — finalize the invoice first." });
+
+        var archived = await db.InvoiceXmls.FindAsync([invoice.Id], ct);
+        if (archived is null)
+        {
+            // Backfill for invoices finalized before E-Rechnung support existed —
+            // only possible when the structured data required for a valid XRechnung
+            // is present. Otherwise report exactly what the legacy invoice is missing.
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(invoice.RecipientEmail)) missing.Add("recipient email");
+            if (string.IsNullOrWhiteSpace(invoice.RecipientStreet)) missing.Add("recipient street");
+            if (string.IsNullOrWhiteSpace(invoice.RecipientPostalCode)) missing.Add("recipient postal code");
+            if (string.IsNullOrWhiteSpace(invoice.RecipientCity)) missing.Add("recipient city");
+            if (string.IsNullOrWhiteSpace(user.Phone)) missing.Add("seller phone");
+
+            if (missing.Count > 0)
+                return Conflict(new
+                {
+                    error = $"This invoice predates E-Rechnung support and cannot produce a valid XRechnung — missing: {string.Join(", ", missing)}."
+                });
+
+            archived = new InvoiceXml { InvoiceId = invoice.Id, Data = einvoice.Generate(invoice, user) };
+            db.InvoiceXmls.Add(archived);
+            await db.SaveChangesAsync(ct);
+        }
+
+        return File(archived.Data, "application/xml", $"{invoice.Number}.xml");
     }
 
     /// <summary>Delete a draft invoice.</summary>
