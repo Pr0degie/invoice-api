@@ -891,6 +891,59 @@ public class InvoiceServiceTests : IDisposable
             .Should().ContainInOrder("Zebra", "Apfel");
     }
 
+    // ── Display mode (Pauschal) ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task CreateAsync_ShouldPersistDisplayMode_RoundTrip()
+    {
+        var created = await _sut.CreateAsync(BuildRequest() with
+        {
+            LineItems =
+            [
+                new() { Description = "Detail", Quantity = 8, UnitPrice = 90m, Unit = "h" },
+                new() { Description = "Pauschal", Quantity = 8, UnitPrice = 90m, Unit = "h", DisplayMode = LineItemDisplayMode.FlatRate },
+            ]
+        });
+
+        var fetched = await _sut.GetAsync(created.Id);
+
+        fetched.LineItems[0].DisplayMode.Should().Be(LineItemDisplayMode.AsEntered);
+        fetched.LineItems[1].DisplayMode.Should().Be(LineItemDisplayMode.FlatRate);
+        // display-only: the stored math is untouched
+        fetched.LineItems[1].Quantity.Should().Be(8);
+        fetched.LineItems[1].UnitPrice.Should().Be(90m);
+        fetched.LineItems[1].Total.Should().Be(720m);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldPersistDisplayMode()
+    {
+        var created = await _sut.CreateAsync(BuildRequest());
+
+        var updated = await _sut.UpdateAsync(created.Id, BuildRequest() with
+        {
+            LineItems = [new() { Description = "Jetzt pauschal", Quantity = 2, UnitPrice = 100m, Unit = "h", DisplayMode = LineItemDisplayMode.FlatRate }]
+        });
+
+        updated.LineItems[0].DisplayMode.Should().Be(LineItemDisplayMode.FlatRate);
+    }
+
+    [Fact]
+    public async Task CancelAsync_ShouldCopyDisplayMode_OnStorno()
+    {
+        await SeedCompleteUser();
+        var draft = await _sut.CreateAsync(BuildRequest() with
+        {
+            LineItems = [new() { Description = "Pauschal", Quantity = 8, UnitPrice = 90m, Unit = "h", DisplayMode = LineItemDisplayMode.FlatRate }]
+        });
+        await _sut.FinalizeAsync(draft.Id);
+
+        var storno = await _sut.CancelAsync(draft.Id);
+
+        storno.LineItems[0].DisplayMode.Should().Be(LineItemDisplayMode.FlatRate);
+        storno.LineItems[0].Total.Should().Be(-720m);
+    }
+
     // ── Reopen (ADR 0003) ───────────────────────────────────────────────────
 
     [Fact]

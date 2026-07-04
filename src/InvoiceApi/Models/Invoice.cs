@@ -74,7 +74,20 @@ public class LineItem
     // come back from the DB in arbitrary order — every read path sorts by Position.
     public int Position { get; set; }
 
+    // How the position is DISPLAYED on the invoice (PDF + detail view). The
+    // entered quantity/unit/price stay stored untouched and keep driving the
+    // math — FlatRate only changes the rendering.
+    public LineItemDisplayMode DisplayMode { get; set; } = LineItemDisplayMode.AsEntered;
+
     public decimal Total => Math.Round(Quantity * UnitPrice, 2);
+}
+
+public enum LineItemDisplayMode
+{
+    AsEntered = 0,
+
+    // Pauschal: rendered as quantity 1, unit "pauschal", unit price = line total.
+    FlatRate = 1,
 }
 
 public enum InvoiceStatus

@@ -37,7 +37,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             Quantity = li.Quantity,
             UnitPrice = li.UnitPrice,
             Unit = li.Unit,
-            Position = index
+            Position = index,
+            DisplayMode = li.DisplayMode
         }).ToList();
 
         var subtotal = lineItems.Sum(li => li.Total);
@@ -157,7 +158,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             Quantity = li.Quantity,
             Unit = li.Unit,
             UnitPrice = li.UnitPrice,
-            Position = index
+            Position = index,
+            DisplayMode = li.DisplayMode
         }).ToList();
         db.LineItems.AddRange(newItems);
 
@@ -345,7 +347,8 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
                 Quantity = -li.Quantity,
                 UnitPrice = li.UnitPrice,
                 Unit = li.Unit,
-                Position = li.Position
+                Position = li.Position,
+                DisplayMode = li.DisplayMode
             }).ToList(),
         };
         storno.TotalAmount = storno.Total;
@@ -499,7 +502,7 @@ internal static class InvoiceMappings
             i.TaxAmount,
             i.Total,
             i.LineItems.OrderBy(li => li.Position).Select(li => new LineItemResponse(
-                li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total
+                li.Id, li.Description, li.Quantity, li.Unit, li.UnitPrice, li.Total, li.DisplayMode
             )).ToList(),
             i.Notes,
             i.CancellationOfId,

@@ -157,13 +157,22 @@ public class PdfService : IPdfService
                 {
                     var bg = index % 2 == 0 ? "#ffffff" : "#f8f9fa";
 
+                    // FlatRate: display-only collapse to 1 × pauschal × line total.
+                    // The stored quantity/unit/price stay untouched (and keep the
+                    // math intact — 1 × total == total). Storno items carry a
+                    // negative quantity, so the flat "1" keeps its sign.
+                    var flat = item.DisplayMode == LineItemDisplayMode.FlatRate;
+                    var quantity = flat ? (item.Quantity < 0 ? -1m : 1m) : item.Quantity;
+                    var unit = flat ? "flat" : item.Unit;
+                    var unitPrice = flat ? Math.Abs(item.Total) : item.UnitPrice;
+
                     table.Cell().Background(bg).Padding(6).Text($"{index + 1}").FontColor(MutedColor);
                     table.Cell().Background(bg).Padding(6).Text(item.Description);
                     table.Cell().Background(bg).Padding(6).AlignRight()
-                        .Text(item.Quantity.ToString("0.##", De));
-                    table.Cell().Background(bg).Padding(6).Text(UnitLabel(item.Unit)).FontColor(MutedColor);
+                        .Text(quantity.ToString("0.##", De));
+                    table.Cell().Background(bg).Padding(6).Text(UnitLabel(unit)).FontColor(MutedColor);
                     table.Cell().Background(bg).Padding(6).AlignRight()
-                        .Text(Amount(item.UnitPrice, invoice.Currency));
+                        .Text(Amount(unitPrice, invoice.Currency));
                     table.Cell().Background(bg).Padding(6).AlignRight()
                         .Text(Amount(item.Total, invoice.Currency));
                 }

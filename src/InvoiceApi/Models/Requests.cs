@@ -29,6 +29,9 @@ public record CreateLineItemRequest
     [Range(0.001, double.MaxValue)] public decimal Quantity { get; init; }
     [Range(0, double.MaxValue)] public decimal UnitPrice { get; init; }
     public string Unit { get; init; } = "h";
+
+    // Display-only: FlatRate renders the position as 1 × pauschal × line total.
+    public LineItemDisplayMode DisplayMode { get; init; } = LineItemDisplayMode.AsEntered;
 }
 
 public record UpdateStatusRequest
@@ -81,5 +84,6 @@ public record LineItemResponse(
     decimal Quantity,
     string Unit,
     decimal UnitPrice,
-    decimal Total
+    decimal Total,
+    LineItemDisplayMode DisplayMode
 );
