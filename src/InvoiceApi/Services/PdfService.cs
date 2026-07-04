@@ -19,7 +19,6 @@ public interface IPdfService
 public class PdfService : IPdfService
 {
     private static readonly string PrimaryColor = "#1a1a2e";
-    private static readonly string AccentColor = "#0f766e";
     private static readonly string MutedColor = "#6b7280";
 
     private static readonly CultureInfo De = CultureInfo.GetCultureInfo("de-DE");
@@ -191,7 +190,7 @@ public class PdfService : IPdfService
                     r.ConstantItem(120).Text("Gesamtbetrag").Bold().FontSize(12);
                     r.ConstantItem(120).AlignRight()
                         .Text(Amount(net + vat, invoice.Currency))
-                        .Bold().FontSize(12).FontColor(AccentColor);
+                        .Bold().FontSize(12).FontColor(PrimaryColor);
                 });
             });
 
