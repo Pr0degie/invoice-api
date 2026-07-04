@@ -75,7 +75,7 @@ public class PdfService : IPdfService
             {
                 col.Item().AlignRight().Text(Title(invoice).ToUpperInvariant())
                     .FontSize(invoice.Type == InvoiceType.Cancellation ? 16 : 20)
-                    .Bold().FontColor(AccentColor);
+                    .Bold().FontColor(PrimaryColor);
                 col.Item().AlignRight().Text($"Nr. {invoice.Number ?? "Entwurf"}")
                     .FontSize(10).FontColor(MutedColor);
             });
