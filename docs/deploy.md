@@ -51,7 +51,7 @@ database is unreachable).
 | Variable | What it does |
 |---|---|
 | `AUTH_SECRET` | **Required.** NextAuth session-JWT encryption key — generate with `openssl rand -base64 32`. The server refuses auth operations without it. |
-| `NEXT_PUBLIC_API_BASE_URL` | **Required.** URL the Next.js *server* uses to reach invoice-api — the browser never calls it directly (all browser traffic goes through the `/api/backend/*` proxy). Inside Coolify, the internal service URL works, e.g. `http://<api-service>:8080`. |
+| `API_BASE_URL` | **Required.** URL the Next.js *server* uses to reach invoice-api — the browser never calls it directly (all browser traffic goes through the `/api/backend/*` proxy). Inside Coolify, the internal service URL works, e.g. `http://<api-service>:8080`. Read at runtime — deliberately not `NEXT_PUBLIC_`-prefixed, because those values are frozen into the bundle at image build time (`NEXT_PUBLIC_API_BASE_URL` remains as the local-dev fallback only). |
 | `NEXTAUTH_URL` | Public URL of the frontend, e.g. `https://app.example.com`. `trustHost` is enabled so NextAuth can also derive it from proxy headers, but set it explicitly to be deterministic. |
 | `NODE_ENV` | `production` — set automatically by the Dockerfile; do not override. |
 
