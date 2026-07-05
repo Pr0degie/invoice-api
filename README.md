@@ -28,7 +28,7 @@ REST API for creating invoices and exporting them as PDF plus German E-Rechnung 
 | E-Rechnung | ZUGFeRD-csharp (XRechnung CII) |
 | Logging | Serilog |
 | Tests | xunit + FluentAssertions |
-| Deploy | Docker + Railway |
+| Deploy | Docker + Coolify (Hetzner) |
 
 ---
 
@@ -176,20 +176,15 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-141 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, and auth flows (incl. e-mail verification, password reset, and anti-enumeration).
+191 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, auth flows (incl. e-mail verification, password reset, and anti-enumeration), and the fail-fast e-mail/SMTP startup validation.
 
 ---
 
 ## Deployment
 
-The repo ships with a `deploy.yml` workflow that deploys to [Railway](https://railway.app) on every merge to `main`. Set `RAILWAY_TOKEN` in your repo secrets and you're done.
+Deploy target is [Coolify](https://coolify.io) on a Hetzner VPS: point a Coolify application at this repo, it builds the `Dockerfile` and serves the container behind its proxy. The complete environment-variable checklist (API, frontend, Postgres) lives in [`docs/deploy.md`](docs/deploy.md).
 
-```bash
-# manual deploy
-railway up
-```
-
-For other platforms: the `Dockerfile` produces a minimal ASP.NET runtime image (~100MB), so it'll run anywhere that speaks Docker.
+The `Dockerfile` produces a minimal ASP.NET runtime image (~100MB), so it'll run anywhere that speaks Docker.
 
 ---
 

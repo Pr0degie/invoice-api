@@ -22,11 +22,10 @@ jobs:
       - name: Restore
         run: dotnet restore
 
-      # TODO: switch to `dotnet build --no-restore -warnaserror` once the last
-      # remaining warning is fixed: CS0618 in src/InvoiceApi/Services/PdfService.cs
-      # (QuestPDF `MinimalBox()` is obsolete, rename to `Shrink()`).
+      # -warnaserror also covers the test project; the app project additionally
+      # pins TreatWarningsAsErrors in InvoiceApi.csproj for local builds.
       - name: Build
-        run: dotnet build --no-restore --configuration Release
+        run: dotnet build --no-restore --configuration Release -warnaserror
 
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity normal

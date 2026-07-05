@@ -353,8 +353,7 @@ public class AuthService(
     }
 
     private string FrontendBaseUrl() =>
-        (config["App:FrontendBaseUrl"] ?? config["FRONTEND_BASE_URL"] ?? "http://localhost:3000")
-            .TrimEnd('/');
+        EmailStartupValidation.ResolveFrontendBaseUrl(config);
 
     private (RefreshToken entity, string rawToken) CreateRefreshToken(Guid userId)
     {

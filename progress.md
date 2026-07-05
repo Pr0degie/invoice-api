@@ -1,5 +1,35 @@
 # Progress
 
+## Pre-Launch-Hardening — Mail-Config, MailKit, Warnings, Coolify (2026-07-05)
+
+Backend-Hälfte der Deploy-Vorbereitung (Frontend-Hälfte in
+`../invoiceflow/docs/progress.md`). Ziel: Coolify-Staging-Deploy auf Hetzner.
+
+- **E-Mail-Konfiguration fail-fast** (`EmailStartupValidation`, aus
+  `Program.cs` aufgerufen): unbekannter Provider (Tippfehler → sonst stiller
+  Log-Sender), fehlender `Email__Smtp__Host`/`Email__FromAddress`, ungültiger
+  Port, halbes User/Password-Paar und (Production) localhost als
+  Mail-Link-Basis brechen jetzt den Boot ab, statt dass der Background-Worker
+  Mails still verliert. `appsettings.Production.json` leert den Provider —
+  Production muss explizit `Email__Provider=Smtp` oder `Log` wählen.
+- **`FRONTEND_BASE_URL`-Präzedenz gefixt:** die Env-Var schlägt jetzt den in
+  `appsettings.json` eingebackenen `App:FrontendBaseUrl`-Default. Vorher
+  konnte sie nie gewinnen — Produktions-Mails hätten localhost-Links gehabt.
+- **`docs/deploy.md` (neu):** komplette Env-Var-Checkliste für Coolify
+  (API, Frontend, Postgres) inkl. der Fail-fast-Fehlerbilder.
+- **MailKit 4.8.0 → 4.17.0** (GHSA-9j88-vvj5-vhgr);
+  `dotnet list package --vulnerable --include-transitive` sauber für beide
+  Projekte. Nullability-Folgefix in `SmtpEmailSender` (Auth nur bei
+  vollständigem Credential-Paar — deckt sich mit der Startup-Validierung).
+- **QuestPDF `MinimalBox()` → `Shrink()`** (reines Rename);
+  `TreatWarningsAsErrors=true` in `InvoiceApi.csproj`, CI-Build mit
+  `-warnaserror`. Release-Build warnungsfrei.
+- **Railway-Reste entfernt:** `railway.json` gelöscht; README/CLAUDE.md/
+  `Program.cs`-Kommentare/`.env.example` auf Coolify umgestellt; ADRs 0001/0002
+  behalten ihre Historie und bekommen eine datierte Update-Notiz.
+- **Tests: 191 grün** (168 → +23 für die Validierung). CLAUDE.md-Zähler
+  aktualisiert.
+
 ## Prompt 15 — GoBD-konforme Account-Löschung (2026-07-05)
 
 ### Umgesetzt

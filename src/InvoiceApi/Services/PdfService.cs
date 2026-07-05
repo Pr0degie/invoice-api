@@ -99,10 +99,10 @@ public class PdfService : IPdfService
                 {
                     // DIN 5008 Absenderzeile: separated from the recipient by a thin
                     // rule (same stroke as the footer) instead of a font underline,
-                    // which sat directly on the recipient name. MinimalBox shrinks the
+                    // which sat directly on the recipient name. Shrink() reduces the
                     // rule to the sender line's own width, so it ends with the address
                     // text instead of running the full column width.
-                    c.Item().MinimalBox().Column(sender =>
+                    c.Item().Shrink().Column(sender =>
                     {
                         sender.Item().Text(SenderLine(invoice)).FontSize(7).FontColor(MutedColor);
                         sender.Item().PaddingTop(2).LineHorizontal(0.5f).LineColor("#d1d5db");

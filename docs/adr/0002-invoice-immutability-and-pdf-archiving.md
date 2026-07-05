@@ -62,6 +62,8 @@ system should not take implicitly. A correction = Storno + new invoice.
   (GoBD).
 - **Why a DB blob and not file storage:** the API deploys to Railway, whose
   container filesystem is ephemeral — files would silently vanish on redeploy.
+  *(Update 2026-07-05: deploy target is now Coolify on Hetzner — container
+  filesystems are equally ephemeral there, the reasoning is unchanged.)*
   A blob column keeps the archive inside the existing backup/restore unit
   (Postgres), keeps user-isolation trivial, and needs no new infrastructure.
   At one PDF (~40 KB) per finalized invoice of a single-tenant freelancer

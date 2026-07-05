@@ -56,7 +56,9 @@ public class SmtpEmailSender(IConfiguration config, ILogger<SmtpEmailSender> log
             : SecureSocketOptions.Auto;
 
         await client.ConnectAsync(host, port, socketOptions, ct);
-        if (!string.IsNullOrEmpty(user))
+        // Startup validation guarantees the pair is complete; the double check
+        // here keeps the MailKit 4.17+ nullability contract satisfied.
+        if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(password))
             await client.AuthenticateAsync(user, password, ct);
         await client.SendAsync(message, ct);
         await client.DisconnectAsync(true, ct);
