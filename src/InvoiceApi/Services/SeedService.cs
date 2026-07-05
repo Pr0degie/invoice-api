@@ -36,6 +36,8 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, IPdfService pd
             Iban = "DE89370400440532013000",
             Bic = "COBADEFFXXX",
             BankName = "Commerzbank München",
+            // Seed users are pre-verified so the demo account can log in immediately.
+            EmailVerifiedAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };

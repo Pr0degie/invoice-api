@@ -28,6 +28,7 @@ public class ExceptionHandlingMiddleware(RequestDelegate next)
     {
         ValidationException => StatusCodes.Status400BadRequest,
         UnauthorizedException => StatusCodes.Status401Unauthorized,
+        ForbiddenException => StatusCodes.Status403Forbidden,
         NotFoundException => StatusCodes.Status404NotFound,
         ConflictException => StatusCodes.Status409Conflict,
         _ => null

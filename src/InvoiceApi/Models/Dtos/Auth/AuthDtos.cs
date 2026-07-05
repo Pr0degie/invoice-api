@@ -61,3 +61,17 @@ public record RefreshRequestDto([Required] string RefreshToken);
 public record ChangePasswordDto(
     [Required] string CurrentPassword,
     [Required, MinLength(8)] string NewPassword);
+
+// Generic single-message body — register / forgot-password / resend-verification
+// return this so the response never reveals whether an account exists.
+public record MessageResponseDto(string Message);
+
+public record ForgotPasswordDto([Required, EmailAddress] string Email);
+
+public record ResetPasswordDto(
+    [Required] string Token,
+    [Required, MinLength(8)] string NewPassword);
+
+public record VerifyEmailDto([Required] string Token);
+
+public record ResendVerificationDto([Required, EmailAddress] string Email);
