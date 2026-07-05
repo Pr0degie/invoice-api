@@ -19,9 +19,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
 
-// DATABASE_URL adapter — Railway provides postgres://user:pass@host:port/db
+// DATABASE_URL adapter — managed Postgres providers inject postgres://user:pass@host:port/db
 // TLS cert validation is ON by default; Database__TrustServerCertificate=true is an
-// explicit opt-out for setups with self-signed certs (e.g. Railway-internal networking).
+// explicit opt-out for setups with self-signed certs (e.g. provider-internal networking).
 var trustServerCertificate = builder.Configuration.GetValue("Database:TrustServerCertificate", false);
 var connectionString = ParseDatabaseUrl(builder.Configuration["DATABASE_URL"], trustServerCertificate)
     ?? builder.Configuration.GetConnectionString("Default");
@@ -79,12 +79,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// Behind Railway's proxy the socket peer is the proxy, not the client.
+// Behind the reverse proxy (Coolify/Traefik) the socket peer is the proxy, not the client.
 // Trust X-Forwarded-For/-Proto so RemoteIpAddress (used by rate-limit partitions) is the real client IP.
 builder.Services.Configure<ForwardedHeadersOptions>(opts =>
 {
     opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // Railway's proxy IPs aren't statically known — clear the loopback-only defaults.
+    // The proxy IPs aren't statically known — clear the loopback-only defaults.
     opts.KnownNetworks.Clear();
     opts.KnownProxies.Clear();
 });
@@ -208,7 +208,7 @@ app.UseSerilogRequestLogging();
 // Domain exceptions → status codes with { error } body
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-// Security headers — HSTS is handled at the edge (Railway / Cloudflare)
+// Security headers — HSTS is handled at the edge (Coolify proxy / CDN)
 app.Use(async (ctx, next) =>
 {
     ctx.Response.Headers.Append("X-Content-Type-Options", "nosniff");
@@ -253,7 +253,7 @@ app.MapGet("/health", async (AppDbContext db, IMemoryCache cache, CancellationTo
 
 app.Run();
 
-// Converts Railway's DATABASE_URL (postgres://user:pass@host:port/db) to Npgsql format
+// Converts a DATABASE_URL (postgres://user:pass@host:port/db) into Npgsql format
 static string? ParseDatabaseUrl(string? databaseUrl, bool trustServerCertificate)
 {
     if (string.IsNullOrEmpty(databaseUrl)) return null;

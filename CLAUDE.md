@@ -31,7 +31,7 @@ Read top-to-bottom before touching code. §3 and §4 are non-negotiable.
 
 REST API for invoice management. Single-tenant per user (no orgs/teams).
 PostgreSQL, JWT auth, QuestPDF for PDF generation, Serilog for structured logs.
-Deployed on Railway. Frontend authenticates via credentials and gets a JWT + refresh token.
+Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via credentials and gets a JWT + refresh token.
 
 ### Key facts
 
@@ -54,7 +54,7 @@ Deployed on Railway. Frontend authenticates via credentials and gets a JWT + ref
 |---|---|
 | Framework | ASP.NET Core 8 (Minimal hosting + Controllers) |
 | ORM | EF Core 8 + Npgsql |
-| DB | PostgreSQL (Docker locally, Railway in prod) |
+| DB | PostgreSQL (Docker locally, Coolify-managed in prod) |
 | Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + custom refresh-token store |
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
@@ -78,7 +78,7 @@ tests/InvoiceApi.Tests/
 ```bash
 docker compose up                    # postgres + api on :8080 (Development env, Swagger enabled)
 dotnet build                         # local build
-dotnet test                          # full xUnit suite (141 tests must stay green)
+dotnet test                          # full xUnit suite (191 tests must stay green)
 dotnet ef migrations add <Name> --project src/InvoiceApi
 dotnet ef database update --project src/InvoiceApi
 ```
@@ -94,7 +94,7 @@ Health: `GET /health` → 200. Swagger UI: `http://localhost:8080/swagger` (Deve
 - **Computed fields are server-authoritative.** `subtotal`, `taxAmount`, `total` for invoices and `total` for line items are computed in `InvoiceService` — ignore any value the client sends.
 - **Status transitions are validated.** Only `Draft` invoices may be `PUT` or `DELETE`d (409 otherwise) — and a reopened draft (one that owns a `Number`) may never be deleted, only re-finalized (gap-free numbering). The `PATCH /status` endpoint enforces the legal transition set.
 - **Per-user invoice numbers via `InvoiceNumberSequences`, not MAX/COUNT.** One sequence row per `(UserId, Year)`; the counter is an EF concurrency token, unique index `(UserId, Number)` as backstop. Assigned only at finalization — never reused. Don't refactor back to MAX or COUNT.
-- **CORS via configuration.** `Cors:AllowedOrigins` array in appsettings, env override `Cors__AllowedOrigins__0` on Railway. Vercel preview deploys allowed via `SetIsOriginAllowed` regex.
+- **CORS via configuration.** `Cors:AllowedOrigins` array in appsettings, env override `Cors__AllowedOrigins__0` in prod. Optional preview-deploy origins via `Cors:PreviewOriginSuffix` (`SetIsOriginAllowed`).
 - **Migrations are append-only.** Never edit a committed migration. Add a new one.
 - **Tests stay green.** PR doesn't ship if `dotnet test` is red.
 
@@ -149,9 +149,8 @@ Never let the two drift.
 
 These are tracked here so the next agent picks the right one:
 
-- [ ] **Railway deploy** — first production push. CORS prod origins must be set to the actual Vercel URL (env var).
+- [ ] **Coolify staging deploy** — first production push to the Hetzner VPS. Env-var checklist: `docs/deploy.md`.
 - [ ] **Swagger in Production** — currently disabled. Enable behind a flag (`Swagger:Enabled` config) for portfolio visibility.
-- [ ] **`TreatWarningsAsErrors`** — re-enable in `InvoiceApi.csproj` once the warnings introduced by the latest .NET 8 SDK update are cleaned up.
 - [ ] **Refresh-token cleanup job** — background `IHostedService` to delete tokens where `ExpiresAt < UtcNow - 7 days`.
 - [ ] **Rate limiting** — currently global. Per-user limits (after auth middleware) would be safer.
 - [ ] **E-mail outbox** — delivery is queued in-process (`IEmailQueue`, no retry/persistence); a crash drops undelivered mail. If transactional/high-value mail is ever added, move to a durable outbox (persist in the triggering DB tx, worker delivers + marks sent, with retry). See ADR 0006 Consequences.

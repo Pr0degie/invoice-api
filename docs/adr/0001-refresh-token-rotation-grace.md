@@ -38,6 +38,8 @@ grace path and never trigger the mass revoke.
 - The raw successor lives in process memory for up to 60 s. Accepted: the API
   runs as a single Railway instance; memory access implies full host
   compromise anyway.
+  *(Update 2026-07-05: deploy target is now Coolify on Hetzner — still a
+  single instance, the reasoning is unchanged.)*
 - **Single-instance assumption.** With multiple API replicas the cache is not
   shared — a losing racer hitting another replica inside the grace window gets
   a plain 401 (no mass revoke, because the theft signal requires the rotation
