@@ -41,7 +41,12 @@ public class PdfService : IPdfService
             {
                 page.Size(PageSizes.A4);
                 page.Margin(40);
-                page.DefaultTextStyle(t => t.FontSize(10).FontFamily("Arial"));
+                // Liberation Serif explicitly (not "Arial"): the original invoices
+                // rendered serif because the font-less base image fell back to a serif
+                // default. Once the Dockerfile added fontconfig, "Arial" started
+                // resolving to Liberation *Sans*, which widened the header so "Pos."
+                // wrapped and the black bar grew taller. Pin the serif to keep the look.
+                page.DefaultTextStyle(t => t.FontSize(10).FontFamily("Liberation Serif"));
 
                 if (isDraft)
                     page.Foreground().AlignCenter().AlignMiddle()
@@ -88,18 +93,25 @@ public class PdfService : IPdfService
             col.Spacing(16);
 
             // Absenderzeile + recipient block, info column right
-            col.Item().Row(row =>
+            col.Item().PaddingBottom(10).Row(row =>
             {
                 row.RelativeItem().Column(c =>
                 {
                     // DIN 5008 Absenderzeile: separated from the recipient by a thin
                     // rule (same stroke as the footer) instead of a font underline,
-                    // which sat directly on the recipient name.
-                    c.Item().Text(SenderLine(invoice)).FontSize(7).FontColor(MutedColor);
-                    c.Item().PaddingTop(2).PaddingBottom(8)
-                        .LineHorizontal(0.5f).LineColor("#d1d5db");
-                    c.Item().Text(invoice.RecipientName).Bold();
-                    c.Item().Text(RecipientAddress(invoice)).FontSize(9);
+                    // which sat directly on the recipient name. MinimalBox shrinks the
+                    // rule to the sender line's own width, so it ends with the address
+                    // text instead of running the full column width.
+                    c.Item().MinimalBox().Column(sender =>
+                    {
+                        sender.Item().Text(SenderLine(invoice)).FontSize(7).FontColor(MutedColor);
+                        sender.Item().PaddingTop(2).LineHorizontal(0.5f).LineColor("#d1d5db");
+                    });
+                    // Gap below the rule == gap above the Absenderzeile (content
+                    // PaddingTop), so the underlined line sits symmetrically between
+                    // the sender header and the recipient.
+                    c.Item().PaddingTop(11).Text(invoice.RecipientName).FontSize(12).Bold();
+                    c.Item().Text(RecipientAddress(invoice)).FontSize(10);
                 });
 
                 row.ConstantItem(220).Column(c =>
