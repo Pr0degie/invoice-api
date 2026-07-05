@@ -177,6 +177,11 @@ if (string.IsNullOrWhiteSpace(runtimeKey) || runtimeKey.Length < 32 || runtimeKe
         "Set the Jwt__SigningKey environment variable.");
 }
 
+// E-mail config validation — a broken/incomplete SMTP setup must abort the
+// boot; delivery happens in the background worker, where a config error would
+// otherwise only be logged while the mail is silently lost.
+EmailStartupValidation.Validate(app.Configuration, app.Environment.IsProduction());
+
 // Auto-run migrations on startup
 using (var scope = app.Services.CreateScope())
 {
