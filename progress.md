@@ -97,3 +97,11 @@ Stand: Build grün (nur die bekannte CS0618-Warnung, s. u.), 124/124 Tests grün
   Siehe TODO-Kommentar im Workflow.
 - Dependabot-Config für das Repo `invoiceflow` (npm + github-actions) wird in
   einer separaten Session umgesetzt — nicht Teil dieses Repos.
+
+## 2026-07-05 — CI-Fix: SQLitePCLRaw-Advisory (PR #1)
+
+Der Job „Vulnerable dependencies" schlug auf dem PR fehl: GHSA-2m69-gcr7-jv3q (High)
+in `SQLitePCLRaw.lib.e_sqlite3` 2.1.6, transitiv über `Microsoft.EntityFrameworkCore.Sqlite`
+8.0.11 (nur Testprojekt). Die Advisory umfasst alle Versionen ≤ 2.1.11 (SQLite < 3.50.2);
+Fix: direkte Referenz `SQLitePCLRaw.bundle_e_sqlite3` 3.0.3 im Testprojekt. Scan danach
+ohne Funde, alle 132 Tests grün (inkl. SQLite-in-memory-AuthServiceTests).

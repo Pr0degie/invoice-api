@@ -20,6 +20,9 @@
     <!-- AuthService uses ExecuteDelete/ExecuteUpdate, which the InMemory provider does not
          support — AuthServiceTests run against SQLite in-memory instead. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.11" />
+    <!-- Lift transitive SQLitePCLRaw out of GHSA-2m69-gcr7-jv3q (High, affects <= 2.1.11);
+         EFCore.Sqlite 8.0.11 pulls 2.1.6 by default. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="FluentAssertions" Version="6.12.0" />
   </ItemGroup>
 
