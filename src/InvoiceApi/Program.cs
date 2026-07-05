@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using QuestPDF.Infrastructure;
@@ -19,7 +20,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
 
 // DATABASE_URL adapter — Railway provides postgres://user:pass@host:port/db
-var connectionString = ParseDatabaseUrl(builder.Configuration["DATABASE_URL"])
+// TLS cert validation is ON by default; Database__TrustServerCertificate=true is an
+// explicit opt-out for setups with self-signed certs (e.g. Railway-internal networking).
+var trustServerCertificate = builder.Configuration.GetValue("Database:TrustServerCertificate", false);
+var connectionString = ParseDatabaseUrl(builder.Configuration["DATABASE_URL"], trustServerCertificate)
     ?? builder.Configuration.GetConnectionString("Default");
 
 builder.Services.AddDbContext<AppDbContext>(opts =>
@@ -207,25 +211,32 @@ app.UseAuthorization();
 // After auth so the "api-user" policy can partition on ctx.User (sub claim)
 app.UseRateLimiter();
 app.MapControllers();
-app.MapGet("/health", async (AppDbContext db, CancellationToken ct) =>
+// The DB probe result is cached for ~10 s so the anonymous endpoint can't be
+// used to hammer the database with cheap requests.
+app.MapGet("/health", async (AppDbContext db, IMemoryCache cache, CancellationToken ct) =>
 {
-    try
+    var canConnect = await cache.GetOrCreateAsync("health:db-up", async entry =>
     {
-        var canConnect = await db.Database.CanConnectAsync(ct);
-        return canConnect
-            ? Results.Ok(new { status = "healthy", database = "up" })
-            : Results.StatusCode(503);
-    }
-    catch
-    {
-        return Results.StatusCode(503);
-    }
+        entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(10);
+        try
+        {
+            return await db.Database.CanConnectAsync(ct);
+        }
+        catch
+        {
+            return false;
+        }
+    });
+
+    return canConnect
+        ? Results.Ok(new { status = "healthy", database = "up" })
+        : Results.StatusCode(503);
 }).AllowAnonymous().DisableRateLimiting();
 
 app.Run();
 
 // Converts Railway's DATABASE_URL (postgres://user:pass@host:port/db) to Npgsql format
-static string? ParseDatabaseUrl(string? databaseUrl)
+static string? ParseDatabaseUrl(string? databaseUrl, bool trustServerCertificate)
 {
     if (string.IsNullOrEmpty(databaseUrl)) return null;
     try
@@ -236,7 +247,8 @@ static string? ParseDatabaseUrl(string? databaseUrl)
         var pass = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
         var port = uri.Port > 0 ? uri.Port : 5432;
         var db = uri.AbsolutePath.TrimStart('/');
-        return $"Host={uri.Host};Port={port};Database={db};Username={user};Password={pass};SSL Mode=Require;Trust Server Certificate=true";
+        var trust = trustServerCertificate ? "true" : "false";
+        return $"Host={uri.Host};Port={port};Database={db};Username={user};Password={pass};SSL Mode=Require;Trust Server Certificate={trust}";
     }
     catch
     {

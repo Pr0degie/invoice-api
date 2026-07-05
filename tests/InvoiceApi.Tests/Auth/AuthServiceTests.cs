@@ -4,6 +4,7 @@ using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos;
 using InvoiceApi.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
@@ -12,22 +13,30 @@ namespace InvoiceApi.Tests.Auth;
 
 public class AuthServiceTests : IDisposable
 {
+    // SQLite in-memory instead of the InMemory provider: AuthService uses
+    // ExecuteDeleteAsync/ExecuteUpdateAsync, which InMemory does not support.
+    private readonly SqliteConnection _connection;
     private readonly AppDbContext _db;
     private readonly AuthService _sut;
+    private readonly IConfiguration _config;
 
     public AuthServiceTests()
     {
+        _connection = new SqliteConnection("DataSource=:memory:");
+        _connection.Open();
+
         var opts = new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseSqlite(_connection)
             .Options;
 
         _db = new AppDbContext(opts);
+        _db.Database.EnsureCreated();
 
-        var config = BuildConfig();
+        _config = BuildConfig();
         var passwordHasher = new BCryptPasswordHasher();
-        var jwtService = new JwtTokenService(config);
+        var jwtService = new JwtTokenService(_config);
 
-        _sut = new AuthService(_db, passwordHasher, jwtService, config,
+        _sut = new AuthService(_db, passwordHasher, jwtService, _config,
             new MemoryCache(new MemoryCacheOptions()));
     }
 
@@ -98,6 +107,37 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.LoginAsync(new LoginDto("nobody@example.com", "somepass"));
 
         await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task Login_WithUnknownEmail_StillVerifiesAgainstDummyHash_WithSameError()
+    {
+        // Timing hardening: the unknown-email path must do the same BCrypt work
+        // as the known-email path, with an identical error message.
+        var recordingHasher = new RecordingPasswordHasher();
+        var sut = new AuthService(_db, recordingHasher, new JwtTokenService(_config), _config,
+            new MemoryCache(new MemoryCacheOptions()));
+
+        var act = () => sut.LoginAsync(new LoginDto("nobody@example.com", "somepass"));
+
+        await act.Should().ThrowAsync<UnauthorizedException>()
+            .WithMessage("Invalid credentials.");
+        // Delegates to real BCrypt — also proves the dummy hash is a valid BCrypt hash.
+        recordingHasher.VerifyCallCount.Should().Be(1);
+    }
+
+    private sealed class RecordingPasswordHasher : IPasswordHasher
+    {
+        private readonly BCryptPasswordHasher _inner = new();
+        public int VerifyCallCount { get; private set; }
+
+        public string Hash(string password) => _inner.Hash(password);
+
+        public bool Verify(string password, string hash)
+        {
+            VerifyCallCount++;
+            return _inner.Verify(password, hash);
+        }
     }
 
     [Fact]
@@ -197,6 +237,10 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.RefreshAsync(oldRefreshToken);
         await act.Should().ThrowAsync<UnauthorizedException>();
 
+        // The mass revoke runs via ExecuteUpdateAsync (bypasses change tracking) —
+        // clear the tracker so stale tracked entities don't mask the revocation.
+        _db.ChangeTracker.Clear();
+
         // Every session is dead, including the legitimate successor
         (await _db.RefreshTokens.AnyAsync(t => t.UserId == userId && t.RevokedAt == null))
             .Should().BeFalse();
@@ -220,6 +264,10 @@ public class AuthServiceTests : IDisposable
         var userId = registered.User.Id;
 
         await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        // Token revocation runs via ExecuteUpdateAsync, which bypasses change tracking —
+        // clear the tracker so the assertions read fresh DB state.
+        _db.ChangeTracker.Clear();
 
         var user = await _db.Users.FindAsync(userId);
         new BCryptPasswordHasher().Verify("newpassword123", user!.PasswordHash).Should().BeTrue();
@@ -276,6 +324,9 @@ public class AuthServiceTests : IDisposable
         var userId = registered.User.Id;
 
         await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        // Revocation ran via ExecuteUpdateAsync — clear stale tracked entities.
+        _db.ChangeTracker.Clear();
 
         var act = () => _sut.RefreshAsync(preChangeRefreshToken);
         await act.Should().ThrowAsync<UnauthorizedException>();
@@ -381,5 +432,9 @@ public class AuthServiceTests : IDisposable
             })
             .Build();
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose()
+    {
+        _db.Dispose();
+        _connection.Dispose();
+    }
 }

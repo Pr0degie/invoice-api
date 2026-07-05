@@ -1,5 +1,42 @@
 # Progress
 
+## Prompt 13 — Auth- & API-Härtung (2026-07-05)
+
+### Umgesetzt
+
+1. **Timing-sichere Login-Prüfung** (`AuthService.LoginAsync`): Bei unbekannter
+   E-Mail wird jetzt gegen einen statischen Cost-12-Dummy-BCrypt-Hash verifiziert,
+   damit beide Pfade dieselbe Arbeit leisten; Fehlermeldung unverändert
+   ("Invalid credentials."). Test: `Login_WithUnknownEmail_StillVerifiesAgainstDummyHash_WithSameError`.
+2. **Passwort-Obergrenze + Workfactor**: `[MaxLength(128)]` auf `RegisterDto.Password`
+   und `ChangePasswordDto.NewPassword`; `BCryptPasswordHasher` pinnt den Workfactor
+   explizit auf 12. Alte Cost-11-Hashes verifizieren weiter (Cost steckt im Hash) —
+   abgesichert in `tests/.../Auth/PasswordHasherTests.cs`.
+3. **TLS zur DB**: `ParseDatabaseUrl` (Program.cs) setzt `Trust Server Certificate`
+   nicht mehr hart auf `true`. Neu: env `Database__TrustServerCertificate`,
+   Default `false` (= Zertifikate werden validiert). Doku in `.env.example`
+   (Railway-interne Verbindungen brauchen ggf. `true`).
+4. **`/health`**: DB-Probe-Ergebnis wird 10 s in `IMemoryCache` gecacht
+   (Variante "Cache" gewählt, kein zusätzliches Rate Limit — Prompt wollte nur eins).
+5. **EF-Bulk-Operationen**: Expired-Token-Housekeeping in `LoginAsync`
+   (`ExecuteDeleteAsync`), Token-Revoke in `ChangePasswordAsync` und Theft-Response
+   in `RefreshAsync` (`ExecuteUpdateAsync`) — keine Token-Listen mehr im Speicher.
+
+### Testsetup-Änderung (wichtig für künftige Sessions)
+
+`ExecuteDelete/ExecuteUpdate` werden vom EF-InMemory-Provider nicht unterstützt.
+`AuthServiceTests` laufen deshalb jetzt gegen **SQLite in-memory**
+(`Microsoft.EntityFrameworkCore.Sqlite` im Testprojekt, offene Connection +
+`EnsureCreated`). Betroffene Tests machen `ChangeTracker.Clear()` vor Assertions,
+weil Bulk-Ops am Change-Tracking vorbeischreiben. Die übrigen Testklassen nutzen
+weiter InMemory. CI braucht weiterhin keinen Postgres-Container.
+Stand: Build grün (nur die bekannte CS0618-Warnung, s. u.), 124/124 Tests grün.
+
+### Offen / TODO
+
+- Token-Rotation/Grace (ADR 0001) unverändert — bewusst nicht angefasst.
+- Keine offenen Punkte aus den fünf Aufgaben.
+
 ## Prompt 16 — CI + Dependabot (2026-07-05)
 
 ### Umgesetzt

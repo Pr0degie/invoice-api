@@ -30,6 +30,11 @@ public class AuthService(
     // instead of 401ing. See docs/adr/0001-refresh-token-rotation-grace.md.
     private const int RotationGraceSeconds = 60;
 
+    // Static cost-12 BCrypt hash (of a throwaway string, matches BCryptPasswordHasher.WorkFactor).
+    // Verified against when the email is unknown so both login paths do the same BCrypt work —
+    // otherwise the response time reveals whether an email is registered.
+    private const string DummyPasswordHash = "$2a$12$nK4B7XO330gbKamdYlUP2uZ4WTpLWLvzxjNPyX5Aov9tAGQ67gOIq";
+
     private static string GraceCacheKey(string tokenHash) => $"refresh-grace:{tokenHash}";
 
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
@@ -64,15 +69,21 @@ public class AuthService(
         var normalizedEmail = dto.Email.ToLowerInvariant();
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, ct);
 
-        if (user is null || !passwordHasher.Verify(dto.Password, user.PasswordHash))
+        if (user is null)
+        {
+            // Timing equalization: do the same BCrypt work as the known-email path.
+            passwordHasher.Verify(dto.Password, DummyPasswordHash);
+            throw new UnauthorizedException("Invalid credentials.");
+        }
+
+        if (!passwordHasher.Verify(dto.Password, user.PasswordHash))
             throw new UnauthorizedException("Invalid credentials.");
 
         // Housekeeping: drop this user's expired refresh tokens
         var now = DateTime.UtcNow;
-        var expiredTokens = await db.RefreshTokens
+        await db.RefreshTokens
             .Where(t => t.UserId == user.Id && t.ExpiresAt < now)
-            .ToListAsync(ct);
-        db.RefreshTokens.RemoveRange(expiredTokens);
+            .ExecuteDeleteAsync(ct);
 
         var (refreshToken, rawToken) = CreateRefreshToken(user.Id);
         db.RefreshTokens.Add(refreshToken);
@@ -106,13 +117,10 @@ public class AuthService(
             // someone replayed a token whose successor is already in use. Kill all sessions.
             if (token.ReplacedByTokenHash is not null && !withinGrace)
             {
-                var activeTokens = await db.RefreshTokens
-                    .Where(t => t.UserId == token.UserId && t.RevokedAt == null)
-                    .ToListAsync(ct);
                 var now = DateTime.UtcNow;
-                foreach (var t in activeTokens)
-                    t.RevokedAt = now;
-                await db.SaveChangesAsync(ct);
+                await db.RefreshTokens
+                    .Where(t => t.UserId == token.UserId && t.RevokedAt == null)
+                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
             }
 
             throw new UnauthorizedException("Invalid or expired refresh token.");
@@ -218,16 +226,12 @@ public class AuthService(
 
         user.PasswordHash = passwordHasher.Hash(dto.NewPassword);
         user.UpdatedAt = DateTime.UtcNow;
-
-        var activeTokens = await db.RefreshTokens
-            .Where(t => t.UserId == userId && t.RevokedAt == null)
-            .ToListAsync(ct);
+        await db.SaveChangesAsync(ct);
 
         var now = DateTime.UtcNow;
-        foreach (var t in activeTokens)
-            t.RevokedAt = now;
-
-        await db.SaveChangesAsync(ct);
+        await db.RefreshTokens
+            .Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
     }
 
     public async Task DeleteAccountAsync(Guid userId, CancellationToken ct = default)

@@ -17,6 +17,9 @@
     <PackageReference Include="xunit" Version="2.7.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.11" />
+    <!-- AuthService uses ExecuteDelete/ExecuteUpdate, which the InMemory provider does not
+         support — AuthServiceTests run against SQLite in-memory instead. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.11" />
     <PackageReference Include="FluentAssertions" Version="6.12.0" />
   </ItemGroup>
 
