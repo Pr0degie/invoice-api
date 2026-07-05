@@ -2,10 +2,14 @@ using System.ComponentModel.DataAnnotations;
 
 namespace InvoiceApi.Models.Dtos;
 
+// Locale is an optional UI-language hint (allowlist de/en, else de) used to
+// localize the verification mail and to prefix the link's path segment. Never
+// trusted as a free string — normalized against the allowlist before use.
 public record RegisterDto(
     [Required, EmailAddress] string Email,
     [Required, MinLength(8)] string Password,
-    [Required, MinLength(2)] string Name
+    [Required, MinLength(2)] string Name,
+    string? Locale = null
 );
 
 public record LoginDto(
@@ -66,7 +70,7 @@ public record ChangePasswordDto(
 // return this so the response never reveals whether an account exists.
 public record MessageResponseDto(string Message);
 
-public record ForgotPasswordDto([Required, EmailAddress] string Email);
+public record ForgotPasswordDto([Required, EmailAddress] string Email, string? Locale = null);
 
 public record ResetPasswordDto(
     [Required] string Token,
@@ -74,4 +78,4 @@ public record ResetPasswordDto(
 
 public record VerifyEmailDto([Required] string Token);
 
-public record ResendVerificationDto([Required, EmailAddress] string Email);
+public record ResendVerificationDto([Required, EmailAddress] string Email, string? Locale = null);

@@ -48,6 +48,18 @@ public class AuthService(
     // doesn't leak account existence (analog to Prompt 13 / ADR 0006).
     private static string? _dummyPasswordHash;
 
+    // UI languages we can localize a mail into and embed as a URL path segment.
+    // The request's `locale` is a hint only — anything off this list (or absent)
+    // falls back to German. Normalizing here means the value that reaches the URL
+    // is always one of these literals, so the field can't be a URL-injection vector.
+    private const string DefaultLocale = "de";
+
+    private static string NormalizeLocale(string? locale)
+    {
+        var candidate = locale?.Trim().ToLowerInvariant();
+        return candidate is "de" or "en" ? candidate : DefaultLocale;
+    }
+
     private static string GraceCacheKey(string tokenHash) => $"refresh-grace:{tokenHash}";
 
     public async Task<MessageResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
@@ -74,7 +86,7 @@ public class AuthService(
         var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.EmailVerification, EmailVerificationTtl, ct);
         await db.SaveChangesAsync(ct);
 
-        await SendVerificationEmailAsync(user, rawToken, ct);
+        await SendVerificationEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
 
         return new MessageResponseDto(
             "Registrierung erfolgreich. Bitte bestätige deine E-Mail-Adresse über den zugesandten Link.");
@@ -183,7 +195,7 @@ public class AuthService(
         {
             var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.PasswordReset, PasswordResetTtl, ct);
             await db.SaveChangesAsync(ct);
-            await SendPasswordResetEmailAsync(user, rawToken, ct);
+            await SendPasswordResetEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
         }
         else
         {
@@ -234,7 +246,7 @@ public class AuthService(
         {
             var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.EmailVerification, EmailVerificationTtl, ct);
             await db.SaveChangesAsync(ct);
-            await SendVerificationEmailAsync(user, rawToken, ct);
+            await SendVerificationEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
         }
         else
         {
@@ -286,31 +298,52 @@ public class AuthService(
         return token;
     }
 
-    private Task SendVerificationEmailAsync(User user, string rawToken, CancellationToken ct)
+    // The link always carries an explicit locale segment (e.g. /de/verify-email),
+    // even for the default locale: next-intl with localePrefix "as-needed" serves
+    // prefixed URLs for every locale, and being explicit is more robust than
+    // re-deriving the frontend's prefix rules here. `locale` is pre-normalized.
+    private Task SendVerificationEmailAsync(User user, string rawToken, string locale, CancellationToken ct)
     {
-        var link = $"{FrontendBaseUrl()}/verify-email?token={rawToken}";
-        var body =
-            $"Hallo {user.Name},\n\n" +
-            "bitte bestätige deine E-Mail-Adresse für InvoiceFlow, indem du den folgenden Link öffnest:\n\n" +
-            $"{link}\n\n" +
-            "Der Link ist 24 Stunden gültig.\n\n" +
-            "Wenn du dich nicht bei InvoiceFlow registriert hast, kannst du diese E-Mail ignorieren.\n\n" +
-            "Viele Grüße\nDein InvoiceFlow-Team";
-        return emailSender.SendAsync(user.Email, "Bestätige deine E-Mail-Adresse", body, ct);
+        var link = $"{FrontendBaseUrl()}/{locale}/verify-email?token={rawToken}";
+        var (subject, body) = locale == "en"
+            ? ("Confirm your email address",
+                $"Hi {user.Name},\n\n" +
+                "please confirm your email address for InvoiceFlow by opening the following link:\n\n" +
+                $"{link}\n\n" +
+                "The link is valid for 24 hours.\n\n" +
+                "If you didn't sign up for InvoiceFlow, you can ignore this email.\n\n" +
+                "Best regards\nYour InvoiceFlow team")
+            : ("Bestätige deine E-Mail-Adresse",
+                $"Hallo {user.Name},\n\n" +
+                "bitte bestätige deine E-Mail-Adresse für InvoiceFlow, indem du den folgenden Link öffnest:\n\n" +
+                $"{link}\n\n" +
+                "Der Link ist 24 Stunden gültig.\n\n" +
+                "Wenn du dich nicht bei InvoiceFlow registriert hast, kannst du diese E-Mail ignorieren.\n\n" +
+                "Viele Grüße\nDein InvoiceFlow-Team");
+        return emailSender.SendAsync(user.Email, subject, body, ct);
     }
 
-    private Task SendPasswordResetEmailAsync(User user, string rawToken, CancellationToken ct)
+    private Task SendPasswordResetEmailAsync(User user, string rawToken, string locale, CancellationToken ct)
     {
-        var link = $"{FrontendBaseUrl()}/reset-password?token={rawToken}";
-        var body =
-            $"Hallo {user.Name},\n\n" +
-            "es wurde ein Zurücksetzen deines InvoiceFlow-Passworts angefordert. " +
-            "Öffne den folgenden Link, um ein neues Passwort zu vergeben:\n\n" +
-            $"{link}\n\n" +
-            "Der Link ist 1 Stunde gültig.\n\n" +
-            "Wenn du das nicht warst, ignoriere diese E-Mail — dein Passwort bleibt unverändert.\n\n" +
-            "Viele Grüße\nDein InvoiceFlow-Team";
-        return emailSender.SendAsync(user.Email, "Passwort zurücksetzen", body, ct);
+        var link = $"{FrontendBaseUrl()}/{locale}/reset-password?token={rawToken}";
+        var (subject, body) = locale == "en"
+            ? ("Reset your password",
+                $"Hi {user.Name},\n\n" +
+                "a reset of your InvoiceFlow password was requested. " +
+                "Open the following link to set a new password:\n\n" +
+                $"{link}\n\n" +
+                "The link is valid for 1 hour.\n\n" +
+                "If this wasn't you, ignore this email — your password stays unchanged.\n\n" +
+                "Best regards\nYour InvoiceFlow team")
+            : ("Passwort zurücksetzen",
+                $"Hallo {user.Name},\n\n" +
+                "es wurde ein Zurücksetzen deines InvoiceFlow-Passworts angefordert. " +
+                "Öffne den folgenden Link, um ein neues Passwort zu vergeben:\n\n" +
+                $"{link}\n\n" +
+                "Der Link ist 1 Stunde gültig.\n\n" +
+                "Wenn du das nicht warst, ignoriere diese E-Mail — dein Passwort bleibt unverändert.\n\n" +
+                "Viele Grüße\nDein InvoiceFlow-Team");
+        return emailSender.SendAsync(user.Email, subject, body, ct);
     }
 
     private string FrontendBaseUrl() =>
