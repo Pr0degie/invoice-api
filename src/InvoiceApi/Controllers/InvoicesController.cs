@@ -188,7 +188,7 @@ public class InvoicesController(
             return NotFound(new { error = $"Invoice {id} not found." });
 
         var user = await db.Users.FindAsync([userId], ct);
-        if (user is null)
+        if (user is null || user.DeletedAt is not null)
             return NotFound(new { error = "User not found." });
 
         if (invoice.Status == InvoiceStatus.Draft)
@@ -230,7 +230,7 @@ public class InvoicesController(
             return NotFound(new { error = $"Invoice {id} not found." });
 
         var user = await db.Users.FindAsync([userId], ct);
-        if (user is null)
+        if (user is null || user.DeletedAt is not null)
             return NotFound(new { error = "User not found." });
 
         if (invoice.Status == InvoiceStatus.Draft)

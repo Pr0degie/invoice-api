@@ -1,5 +1,35 @@
 # Progress
 
+## Prompt 15 — GoBD-konforme Account-Löschung (2026-07-05)
+
+### Umgesetzt
+
+- **`DeleteAccountAsync` verzweigt** (`AuthService`): Ohne nummerierte Rechnungen
+  (`Status != Draft || Number != null`) Hard-Delete wie bisher; sonst
+  **Anonymisierung** in einer Transaktion — unnummerierte Drafts + alle Refresh
+  Tokens per `ExecuteDeleteAsync` weg, User-Felder genullt, E-Mail →
+  `deleted-{guid:N}@anonym.invalid`, PasswordHash → Hash eines verworfenen
+  Zufallswerts, `DeletedAt` gesetzt. Nummerierte Rechnungen (inkl. Storno und
+  reopened Drafts mit Nummer, ADR 0003) samt PDF-/XML-Archiv bleiben unberührt.
+- **Neues Feld `User.DeletedAt`** + Migration `20260705…_AddUserDeletedAt`
+  (eine nullable Spalte, läuft auf leerer wie befüllter DB).
+- **`DeletedAt != null` ⇒ 401 überall**: `GET/PATCH /auth/me`, Change-Password,
+  zweites `DELETE /me`, Login (Dummy-Hash-Pfad, timing-neutral), Refresh
+  (Belt-and-Braces), plus User-Lookups in `InvoiceService`
+  (Finalize/Cancel) und `InvoicesController` (PDF/XML-Download).
+- **ADR `docs/adr/0005-gobd-account-deletion-anonymization.md`**: DSGVO-Löschrecht
+  vs. § 147 AO, Entscheidung, Alternativen. `DELETE /me` liefert weiterhin 204
+  in beiden Zweigen — kein Frontend-Change nötig.
+- **Tests** (AuthServiceTests, SQLite in-memory wegen Bulk-Ops): Hard-Delete-Pfad,
+  Anonymisierung (Archiv intakt, Login mit alter + Platzhalter-Mail unmöglich,
+  `/me` → 401 via Controller-Test), Unique-Email-Kollision (zwei Löschungen),
+  Cancelled- und Reopened-Draft-Retention. Stand: 132/132 grün.
+
+### Offen / TODO
+
+- Lösch-Scheduler nach Ablauf der 8-Jahres-Frist (Belege + anonymisierte User-Rows
+  endgültig entfernen) — bewusst nicht gebaut, eigener späterer Prompt.
+
 ## Prompt 13 — Auth- & API-Härtung (2026-07-05)
 
 ### Umgesetzt
