@@ -280,6 +280,86 @@ public class PasswordResetAndVerificationTests : IDisposable
         await act.Should().ThrowAsync<ValidationException>().WithMessage("invalid_or_expired_token");
     }
 
+    // ── Locale in mail links (Prompt 18c) ───────────────────────────────────────
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    public async Task Register_LinkCarriesRequestedLocalePrefix(string locale)
+    {
+        await _sut.RegisterAsync(new RegisterDto($"loc-{locale}@example.com", "password123", "User", locale));
+
+        _email.Last.Body.Should().Contain($"https://app.invoiceflow.test/{locale}/verify-email?token=");
+    }
+
+    [Fact]
+    public async Task Register_EnglishLocale_UsesEnglishSubject()
+    {
+        await _sut.RegisterAsync(new RegisterDto("loc-en-subj@example.com", "password123", "User", "en"));
+
+        _email.Last.Subject.Should().Be("Confirm your email address");
+    }
+
+    [Fact]
+    public async Task Register_GermanLocale_UsesGermanSubject()
+    {
+        await _sut.RegisterAsync(new RegisterDto("loc-de-subj@example.com", "password123", "User", "de"));
+
+        _email.Last.Subject.Should().Be("Bestätige deine E-Mail-Adresse");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("fr")]
+    [InlineData("EN-US")]
+    public async Task Register_MissingOrUnknownLocale_FallsBackToGerman(string? locale)
+    {
+        await _sut.RegisterAsync(new RegisterDto("loc-fallback@example.com", "password123", "User", locale));
+
+        _email.Last.Body.Should().Contain("https://app.invoiceflow.test/de/verify-email?token=");
+        _email.Last.Subject.Should().Be("Bestätige deine E-Mail-Adresse");
+    }
+
+    [Theory]
+    [InlineData("en/../../evil.com")]
+    [InlineData("de/admin")]
+    [InlineData("en?x=1")]
+    [InlineData("https://evil.com")]
+    public async Task Register_LocaleCannotInjectIntoUrl_FallsBackToGerman(string malicious)
+    {
+        await _sut.RegisterAsync(new RegisterDto("loc-inject@example.com", "password123", "User", malicious));
+
+        // The path segment is always one allowlisted literal — the payload never
+        // reaches the URL.
+        _email.Last.Body.Should().Contain("https://app.invoiceflow.test/de/verify-email?token=");
+        _email.Last.Body.Should().NotContain("evil");
+        _email.Last.Body.Should().NotContain("admin");
+    }
+
+    [Fact]
+    public async Task ForgotPassword_EnglishLocale_LocalizesLinkAndSubject()
+    {
+        await RegisterVerifiedAsync("loc-forgot@example.com");
+
+        await _sut.ForgotPasswordAsync(new ForgotPasswordDto("loc-forgot@example.com", "en"));
+
+        _email.Last.Body.Should().Contain("https://app.invoiceflow.test/en/reset-password?token=");
+        _email.Last.Subject.Should().Be("Reset your password");
+    }
+
+    [Fact]
+    public async Task ResendVerification_EnglishLocale_LocalizesLink()
+    {
+        await _sut.RegisterAsync(new RegisterDto("loc-resend@example.com", "password123", "User"));
+        _email.Messages.Clear();
+
+        await _sut.ResendVerificationAsync(new ResendVerificationDto("loc-resend@example.com", "en"));
+
+        _email.Last.Body.Should().Contain("https://app.invoiceflow.test/en/verify-email?token=");
+        _email.Last.Subject.Should().Be("Confirm your email address");
+    }
+
     // Inserts a token row directly with a known raw value and TTL.
     private string SeedToken(Guid userId, UserTokenType type, TimeSpan expiresIn)
     {
