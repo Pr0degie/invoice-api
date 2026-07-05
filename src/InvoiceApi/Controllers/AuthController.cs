@@ -14,10 +14,11 @@ namespace InvoiceApi.Controllers;
 [Produces("application/json")]
 public class AuthController(IAuthService authService, AppDbContext db) : ControllerBase
 {
-    /// <summary>Register a new user.</summary>
+    /// <summary>Register a new user. Sends an e-mail verification link; no session is
+    /// issued — the account must be verified before it can log in.</summary>
     [HttpPost("register")]
     [EnableRateLimiting("auth-ip")]
-    [ProducesResponseType<AuthResponseDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType<MessageResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Register([FromBody] RegisterDto dto, CancellationToken ct)
@@ -33,13 +34,52 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         }
     }
 
-    /// <summary>Log in and receive tokens.</summary>
+    /// <summary>Log in and receive tokens. Unverified accounts get 403 email_not_verified.</summary>
     [HttpPost("login")]
     [EnableRateLimiting("auth-ip")]
     [ProducesResponseType<AuthResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Login([FromBody] LoginDto dto, CancellationToken ct)
         => Ok(await authService.LoginAsync(dto, ct));
+
+    /// <summary>Request a password-reset link. Always 200 with a generic message —
+    /// never reveals whether the address is registered.</summary>
+    [HttpPost("forgot-password")]
+    [EnableRateLimiting("auth-ip")]
+    [ProducesResponseType<MessageResponseDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordDto dto, CancellationToken ct)
+        => Ok(await authService.ForgotPasswordAsync(dto, ct));
+
+    /// <summary>Redeem a reset token and set a new password. Revokes all refresh tokens.</summary>
+    [HttpPost("reset-password")]
+    [EnableRateLimiting("auth-ip")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto, CancellationToken ct)
+    {
+        await authService.ResetPasswordAsync(dto, ct);
+        return NoContent();
+    }
+
+    /// <summary>Redeem an e-mail-verification token, unblocking login.</summary>
+    [HttpPost("verify-email")]
+    [EnableRateLimiting("auth-ip")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailDto dto, CancellationToken ct)
+    {
+        await authService.VerifyEmailAsync(dto, ct);
+        return NoContent();
+    }
+
+    /// <summary>Re-send the verification link. Always 200 with a generic message —
+    /// never reveals whether the address is registered or already verified.</summary>
+    [HttpPost("resend-verification")]
+    [EnableRateLimiting("auth-ip")]
+    [ProducesResponseType<MessageResponseDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationDto dto, CancellationToken ct)
+        => Ok(await authService.ResendVerificationAsync(dto, ct));
 
     /// <summary>Refresh an access token using a refresh token.</summary>
     [HttpPost("refresh")]

@@ -2,11 +2,15 @@ using System.ComponentModel.DataAnnotations;
 
 namespace InvoiceApi.Models.Dtos;
 
+// Locale is an optional UI-language hint (allowlist de/en, else de) used to
+// localize the verification mail and to prefix the link's path segment. Never
+// trusted as a free string — normalized against the allowlist before use.
 public record RegisterDto(
     [Required, EmailAddress] string Email,
     // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
     [Required, MinLength(8), MaxLength(128)] string Password,
-    [Required, MinLength(2)] string Name
+    [Required, MinLength(2)] string Name,
+    string? Locale = null
 );
 
 public record LoginDto(
@@ -63,3 +67,17 @@ public record ChangePasswordDto(
     [Required] string CurrentPassword,
     // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
     [Required, MinLength(8), MaxLength(128)] string NewPassword);
+
+// Generic single-message body — register / forgot-password / resend-verification
+// return this so the response never reveals whether an account exists.
+public record MessageResponseDto(string Message);
+
+public record ForgotPasswordDto([Required, EmailAddress] string Email, string? Locale = null);
+
+public record ResetPasswordDto(
+    [Required] string Token,
+    [Required, MinLength(8), MaxLength(128)] string NewPassword);
+
+public record VerifyEmailDto([Required] string Token);
+
+public record ResendVerificationDto([Required, EmailAddress] string Email, string? Locale = null);

@@ -1,0 +1,13 @@
+# Local-only overrides — NOT committed (see .gitignore).
+# Docker Compose merges this on top of docker-compose.yml automatically.
+#
+# Reason: host port 5432 is occupied by another project's Postgres
+# container (openmetadata_postgresql). We remap the DB's *host* port to
+# 5433 so the invoiceapi DB can start. Container-internal networking is
+# unchanged — the api service still reaches the db via `db:5432`.
+services:
+  db:
+    # !override replaces the base ports list instead of appending to it
+    # (Compose merges list values by concatenation otherwise).
+    ports: !override
+      - "5433:5432"

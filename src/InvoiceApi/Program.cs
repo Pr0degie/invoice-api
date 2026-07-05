@@ -42,6 +42,19 @@ builder.Services.AddScoped<IPdfService, PdfService>();
 builder.Services.AddScoped<IEInvoiceService, EInvoiceService>();
 builder.Services.AddScoped<SeedService>();
 
+// E-mail: real SMTP only when explicitly selected (Email:Provider=Smtp), otherwise
+// the log-only sender — the default in Development and anywhere SMTP isn't configured.
+if (string.Equals(builder.Configuration["Email:Provider"], "Smtp", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+else
+    builder.Services.AddScoped<IEmailSender, LogEmailSender>();
+
+// Delivery is decoupled from the request path: services enqueue, a background
+// worker drains the queue and sends. Keeps SMTP latency/failures off the auth
+// endpoints (no enumeration oracle, no request failure on a mail outage).
+builder.Services.AddSingleton<IEmailQueue, ChannelEmailQueue>();
+builder.Services.AddHostedService<EmailBackgroundService>();
+
 // JWT auth — key presence/strength is validated at startup below; no fallback here
 var jwtSection = builder.Configuration.GetSection("Jwt");
 var signingKey = builder.Configuration["Jwt:SigningKey"]

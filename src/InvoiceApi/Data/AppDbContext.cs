@@ -9,6 +9,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<LineItem> LineItems => Set<LineItem>();
     public DbSet<User> Users => Set<User>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<UserToken> UserTokens => Set<UserToken>();
     public DbSet<InvoicePdf> InvoicePdfs => Set<InvoicePdf>();
     public DbSet<InvoiceXml> InvoiceXmls => Set<InvoiceXml>();
     public DbSet<InvoiceNumberSequence> InvoiceNumberSequences => Set<InvoiceNumberSequence>();
@@ -145,6 +146,20 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .HasForeignKey(x => x.UserId)
              .OnDelete(DeleteBehavior.Cascade);
             e.Ignore(x => x.IsRevoked);
+        });
+
+        b.Entity<UserToken>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.TokenHash).IsRequired().HasMaxLength(256);
+            // Redemption looks tokens up by hash; the type disambiguates reuse.
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.HasIndex(x => new { x.UserId, x.Type });
+            e.HasOne(x => x.User)
+             .WithMany()
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Cascade);
+            e.Ignore(x => x.IsConsumed);
         });
     }
 }

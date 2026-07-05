@@ -56,13 +56,34 @@ Swagger UI: [http://localhost:8080/swagger](http://localhost:8080/swagger)
 ### Auth endpoints (public)
 
 ```
-POST   /api/auth/register   — create account → { token, refreshToken, expiresAt, user }
-POST   /api/auth/login      — sign in        → { token, refreshToken, expiresAt, user }
-POST   /api/auth/refresh    — rotate tokens  → { token, refreshToken, expiresAt, user }
-POST   /api/auth/logout     — revoke refresh token
-GET    /api/auth/me         — current user info  [requires Bearer token]
-PATCH  /api/auth/me         — update profile / tax data (tax IDs, § 19 flag, address, bank details)  [requires Bearer token]
+POST   /api/auth/register              — create account (unverified) → 201 { message }; NO session
+POST   /api/auth/login                 — sign in → { token, refreshToken, expiresAt, user }; 403 email_not_verified if unverified
+POST   /api/auth/refresh               — rotate tokens → { token, refreshToken, expiresAt, user }
+POST   /api/auth/logout                — revoke refresh token
+POST   /api/auth/verify-email          — redeem the e-mailed verification link (24 h) → 204
+POST   /api/auth/resend-verification   — re-send verification link → 200 { message } (always, generic)
+POST   /api/auth/forgot-password       — request a reset link → 200 { message } (always, generic)
+POST   /api/auth/reset-password        — set a new password via token (1 h) → 204 (revokes all refresh tokens)
+POST   /api/auth/change-password       — change password when signed in → 204  [requires Bearer token]
+GET    /api/auth/me                     — current user info  [requires Bearer token]
+PATCH  /api/auth/me                     — update profile / tax data (tax IDs, § 19 flag, address, bank details)  [requires Bearer token]
+DELETE /api/auth/me                     — delete the account  [requires Bearer token]
 ```
+
+Registration does **not** log the user in: it creates an unverified account and
+e-mails a verification link; login stays blocked (`403 email_not_verified`) until
+`verify-email` is redeemed. `forgot-password` / `resend-verification` always return
+the same generic `200` regardless of whether the address exists. In Development,
+mails (incl. the link) are written to the log — no SMTP needed. See
+[`docs/adr/0006`](docs/adr/0006-password-reset-and-email-verification.md).
+
+`register`, `forgot-password` and `resend-verification` accept an optional
+`locale` (`"de"` | `"en"`; anything else or absent → `de`). It localizes the mail
+(subject + body) and is embedded as an explicit path segment in the link
+(`{FRONTEND_BASE_URL}/{locale}/verify-email?token=…`, likewise `/reset-password`)
+so next-intl (`localePrefix: "as-needed"`) lands the user on their own language.
+The value is normalized against the allowlist before it touches the URL — never a
+free string.
 
 ### Invoice endpoints (require Bearer token)
 
@@ -86,18 +107,23 @@ DELETE /api/invoices/{id}           — delete draft (drafts only, 409 otherwise
 
 Full spec available via Swagger when running locally.
 
-### Example: register + create invoice
+### Example: register, verify, create invoice
 
 ```http
-# 1. Register
+# 1. Register — creates an UNVERIFIED account and e-mails a verification link
 POST /api/auth/register
 Content-Type: application/json
 
 { "email": "tobias@example.com", "password": "supersecret", "name": "Tobias Dev" }
 
+# Response: 201 { "message": "Registrierung erfolgreich. Bitte bestätige ..." }
+
+# 2. Redeem the link from the e-mail (in Dev: printed to the log), then log in
+POST /api/auth/verify-email   { "token": "<from link>" }        # → 204
+POST /api/auth/login          { "email": "...", "password": "..." }
 # Response: { "token": "<jwt>", "refreshToken": "...", ... }
 
-# 2. Create invoice (use token from step 1)
+# 3. Create invoice (use token from step 2)
 POST /api/invoices
 Authorization: Bearer <jwt>
 Content-Type: application/json
@@ -150,7 +176,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-121 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, and auth flows.
+141 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, and auth flows (incl. e-mail verification, password reset, and anti-enumeration).
 
 ---
 
@@ -181,7 +207,9 @@ For other platforms: the `Dockerfile` produces a minimal ASP.NET runtime image (
 
 Or via environment variable: `ConnectionStrings__Default`.
 
-DB migrations run automatically on startup.
+For the reset/verification e-mails set `FRONTEND_BASE_URL` (link host) and, to send
+real mail, `Email__Provider=Smtp` + the `Email__Smtp*` vars — see [`.env.example`](.env.example).
+Without them, Development uses a log-only mail sender. DB migrations run automatically on startup.
 
 ---
 

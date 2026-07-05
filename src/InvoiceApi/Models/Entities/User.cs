@@ -9,6 +9,10 @@ public class User
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    // Set when the user redeems the verification link. Null = unverified;
+    // unverified accounts cannot log in (see AuthService.LoginAsync).
+    public DateTime? EmailVerifiedAt { get; set; }
+
     public string? DefaultSenderName { get; set; }
     public string? DefaultSenderAddress { get; set; }
 
@@ -54,6 +58,33 @@ public class RefreshToken
     public string? ReplacedByTokenHash { get; set; }
 
     public bool IsRevoked => RevokedAt.HasValue;
+
+    public Guid UserId { get; set; }
+    public User User { get; set; } = null!;
+}
+
+public enum UserTokenType
+{
+    PasswordReset,
+    EmailVerification
+}
+
+/// <summary>
+/// One-time, TTL-bound token for out-of-band flows (password reset, e-mail
+/// verification). Same hardening as refresh tokens (ADR 0001): the raw token
+/// is mailed to the user once and only its SHA-256 hash is stored at rest.
+/// Single-use — <see cref="ConsumedAt"/> is stamped on redemption.
+/// </summary>
+public class UserToken
+{
+    public Guid Id { get; set; }
+    public required string TokenHash { get; set; }
+    public UserTokenType Type { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ConsumedAt { get; set; }
+
+    public bool IsConsumed => ConsumedAt.HasValue;
 
     public Guid UserId { get; set; }
     public User User { get; set; } = null!;

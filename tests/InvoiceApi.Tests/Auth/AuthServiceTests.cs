@@ -21,6 +21,7 @@ public class AuthServiceTests : IDisposable
     // ExecuteDeleteAsync/ExecuteUpdateAsync, which InMemory does not support.
     private readonly SqliteConnection _connection;
     private readonly AppDbContext _db;
+    private readonly CapturingEmailQueue _email = new();
     private readonly AuthService _sut;
     private readonly IConfiguration _config;
 
@@ -40,28 +41,47 @@ public class AuthServiceTests : IDisposable
         var passwordHasher = new BCryptPasswordHasher();
         var jwtService = new JwtTokenService(_config);
 
-        _sut = new AuthService(_db, passwordHasher, jwtService, _config,
+        _sut = new AuthService(_db, passwordHasher, jwtService, _email, _config,
             new MemoryCache(new MemoryCacheOptions()));
     }
 
-    [Fact]
-    public async Task Register_ShouldCreateUserAndReturnTokens()
+    // Register then flip the account to verified so it can log in — the common
+    // arrangement for tests that aren't about the verification flow itself.
+    private async Task<User> RegisterVerifiedAsync(string email, string password = "password123", string name = "Test User")
     {
-        var dto = new RegisterDto("test@example.com", "password123", "Test User");
+        await _sut.RegisterAsync(new RegisterDto(email, password, name));
+        var user = await _db.Users.FirstAsync(u => u.Email == email.ToLowerInvariant());
+        user.EmailVerifiedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return user;
+    }
 
-        var result = await _sut.RegisterAsync(dto);
+    private async Task<AuthResponseDto> RegisterVerifyLoginAsync(string email, string password = "password123", string name = "Test User")
+    {
+        await RegisterVerifiedAsync(email, password, name);
+        return await _sut.LoginAsync(new LoginDto(email, password));
+    }
 
-        result.Token.Should().NotBeNullOrEmpty();
-        result.RefreshToken.Should().NotBeNullOrEmpty();
-        result.User.Email.Should().Be("test@example.com");
-        result.User.Name.Should().Be("Test User");
+    [Fact]
+    public async Task Register_CreatesUnverifiedUser_SendsVerificationEmail_NoSession()
+    {
+        var result = await _sut.RegisterAsync(new RegisterDto("test@example.com", "password123", "Test User"));
+
+        result.Message.Should().NotBeNullOrEmpty();
 
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == "test@example.com");
         user.Should().NotBeNull();
+        user!.EmailVerifiedAt.Should().BeNull();
 
-        var token = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.UserId == user!.Id);
-        token.Should().NotBeNull();
-        token!.IsRevoked.Should().BeFalse();
+        // No session (refresh token) is minted at registration
+        (await _db.RefreshTokens.AnyAsync(t => t.UserId == user.Id)).Should().BeFalse();
+
+        // A verification e-mail with a redeemable token went out
+        _email.Messages.Should().ContainSingle();
+        _email.Last.To.Should().Be("test@example.com");
+        var tokenHash = RefreshTokenHasher.Hash(_email.LastToken());
+        (await _db.UserTokens.AnyAsync(t =>
+            t.TokenHash == tokenHash && t.Type == UserTokenType.EmailVerification)).Should().BeTrue();
     }
 
     [Fact]
@@ -85,9 +105,9 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Login_WithValidCredentials_ShouldReturnTokens()
+    public async Task Login_WithValidVerifiedCredentials_ShouldReturnTokens()
     {
-        await _sut.RegisterAsync(new RegisterDto("login@example.com", "mypassword", "Login User"));
+        await RegisterVerifiedAsync("login@example.com", "mypassword");
 
         var result = await _sut.LoginAsync(new LoginDto("login@example.com", "mypassword"));
 
@@ -96,9 +116,35 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Login_Unverified_ShouldThrowForbidden_EmailNotVerified()
+    {
+        await _sut.RegisterAsync(new RegisterDto("unverified@example.com", "password123", "User"));
+
+        var act = () => _sut.LoginAsync(new LoginDto("unverified@example.com", "password123"));
+
+        (await act.Should().ThrowAsync<ForbiddenException>())
+            .WithMessage("email_not_verified");
+    }
+
+    [Fact]
+    public async Task Login_AfterVerification_ShouldSucceed()
+    {
+        await _sut.RegisterAsync(new RegisterDto("verifyme@example.com", "password123", "User"));
+
+        // Still blocked before verification
+        var before = () => _sut.LoginAsync(new LoginDto("verifyme@example.com", "password123"));
+        await before.Should().ThrowAsync<ForbiddenException>();
+
+        await _sut.VerifyEmailAsync(new VerifyEmailDto(_email.LastToken()));
+
+        var after = await _sut.LoginAsync(new LoginDto("verifyme@example.com", "password123"));
+        after.Token.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
     public async Task Login_WithWrongPassword_ShouldThrowUnauthorizedException()
     {
-        await _sut.RegisterAsync(new RegisterDto("user@example.com", "correctpass", "User"));
+        await RegisterVerifiedAsync("user@example.com", "correctpass");
 
         var act = () => _sut.LoginAsync(new LoginDto("user@example.com", "wrongpass"));
 
@@ -119,7 +165,7 @@ public class AuthServiceTests : IDisposable
         // Timing hardening: the unknown-email path must do the same BCrypt work
         // as the known-email path, with an identical error message.
         var recordingHasher = new RecordingPasswordHasher();
-        var sut = new AuthService(_db, recordingHasher, new JwtTokenService(_config), _config,
+        var sut = new AuthService(_db, recordingHasher, new JwtTokenService(_config), _email, _config,
             new MemoryCache(new MemoryCacheOptions()));
 
         var act = () => sut.LoginAsync(new LoginDto("nobody@example.com", "somepass"));
@@ -145,10 +191,43 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Login_ShouldStoreRefreshTokenHashed_NotRaw()
+    {
+        var result = await RegisterVerifyLoginAsync("hashed@example.com");
+
+        (await _db.RefreshTokens.AnyAsync(t => t.Token == result.RefreshToken)).Should().BeFalse();
+        (await _db.RefreshTokens.AnyAsync(t => t.Token == RefreshTokenHasher.Hash(result.RefreshToken)))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Login_ShouldDeleteExpiredRefreshTokens()
+    {
+        var user = await RegisterVerifiedAsync("expired@example.com");
+
+        _db.RefreshTokens.Add(new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            Token = RefreshTokenHasher.Hash("some-expired-token"),
+            UserId = user.Id,
+            CreatedAt = DateTime.UtcNow.AddDays(-60),
+            ExpiresAt = DateTime.UtcNow.AddDays(-30)
+        });
+        await _db.SaveChangesAsync();
+
+        await _sut.LoginAsync(new LoginDto("expired@example.com", "password123"));
+
+        (await _db.RefreshTokens.AnyAsync(t => t.UserId == user.Id && t.ExpiresAt < DateTime.UtcNow))
+            .Should().BeFalse();
+        // only the freshly-minted login token survives
+        (await _db.RefreshTokens.CountAsync(t => t.UserId == user.Id)).Should().Be(1);
+    }
+
+    [Fact]
     public async Task Refresh_WithValidToken_ShouldReturnNewTokensAndRevokeOld()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("refresh@example.com", "password123", "User"));
-        var oldRefreshToken = registered.RefreshToken;
+        var loggedIn = await RegisterVerifyLoginAsync("refresh@example.com");
+        var oldRefreshToken = loggedIn.RefreshToken;
 
         var refreshed = await _sut.RefreshAsync(oldRefreshToken);
 
@@ -161,44 +240,10 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Register_ShouldStoreRefreshTokenHashed_NotRaw()
-    {
-        var result = await _sut.RegisterAsync(new RegisterDto("hashed@example.com", "password123", "User"));
-
-        (await _db.RefreshTokens.AnyAsync(t => t.Token == result.RefreshToken)).Should().BeFalse();
-        (await _db.RefreshTokens.AnyAsync(t => t.Token == RefreshTokenHasher.Hash(result.RefreshToken)))
-            .Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task Login_ShouldDeleteExpiredRefreshTokens()
-    {
-        var registered = await _sut.RegisterAsync(new RegisterDto("expired@example.com", "password123", "User"));
-        var userId = registered.User.Id;
-
-        _db.RefreshTokens.Add(new RefreshToken
-        {
-            Id = Guid.NewGuid(),
-            Token = RefreshTokenHasher.Hash("some-expired-token"),
-            UserId = userId,
-            CreatedAt = DateTime.UtcNow.AddDays(-60),
-            ExpiresAt = DateTime.UtcNow.AddDays(-30)
-        });
-        await _db.SaveChangesAsync();
-
-        await _sut.LoginAsync(new LoginDto("expired@example.com", "password123"));
-
-        (await _db.RefreshTokens.AnyAsync(t => t.UserId == userId && t.ExpiresAt < DateTime.UtcNow))
-            .Should().BeFalse();
-        // non-expired tokens survive: the register token + the new login token
-        (await _db.RefreshTokens.CountAsync(t => t.UserId == userId)).Should().Be(2);
-    }
-
-    [Fact]
     public async Task Refresh_WithRevokedToken_ShouldThrowUnauthorizedException()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("revoke@example.com", "password123", "User"));
-        var refreshToken = registered.RefreshToken;
+        var loggedIn = await RegisterVerifyLoginAsync("revoke@example.com");
+        var refreshToken = loggedIn.RefreshToken;
 
         await _sut.RevokeRefreshTokenAsync(refreshToken);
 
@@ -210,10 +255,8 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task Refresh_WithJustRotatedToken_WithinGrace_ReturnsSameSuccessorTokens()
     {
-        // Two concurrent refreshes with the same token: the second one must not 401
-        // but receive the identical successor tokens.
-        var registered = await _sut.RegisterAsync(new RegisterDto("grace@example.com", "password123", "User"));
-        var oldRefreshToken = registered.RefreshToken;
+        var loggedIn = await RegisterVerifyLoginAsync("grace@example.com");
+        var oldRefreshToken = loggedIn.RefreshToken;
 
         var first = await _sut.RefreshAsync(oldRefreshToken);
         var second = await _sut.RefreshAsync(oldRefreshToken);
@@ -225,14 +268,12 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task Refresh_WithRotatedToken_AfterGrace_RevokesAllUserTokens()
     {
-        // Replaying a rotated token after the grace window is a theft signal.
-        var registered = await _sut.RegisterAsync(new RegisterDto("theft@example.com", "password123", "User"));
-        var userId = registered.User.Id;
-        var oldRefreshToken = registered.RefreshToken;
+        var loggedIn = await RegisterVerifyLoginAsync("theft@example.com");
+        var userId = loggedIn.User.Id;
+        var oldRefreshToken = loggedIn.RefreshToken;
 
         var successor = await _sut.RefreshAsync(oldRefreshToken);
 
-        // Age the rotation past the 60s grace window
         var rotated = await _db.RefreshTokens
             .FirstAsync(t => t.Token == RefreshTokenHasher.Hash(oldRefreshToken));
         rotated.RevokedAt = DateTime.UtcNow.AddSeconds(-120);
@@ -263,9 +304,9 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task ChangePassword_WithCorrectCurrent_UpdatesHashAndRevokesRefreshTokens()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("chpw@example.com", "oldpassword", "User"));
-        var oldRefreshToken = registered.RefreshToken;
-        var userId = registered.User.Id;
+        var loggedIn = await RegisterVerifyLoginAsync("chpw@example.com", "oldpassword");
+        var oldRefreshToken = loggedIn.RefreshToken;
+        var userId = loggedIn.User.Id;
 
         await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
 
@@ -284,17 +325,16 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task ChangePassword_WithWrongCurrent_ThrowsValidationException_AndLeavesDbUnchanged()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("chpw2@example.com", "correctpass", "User"));
-        var userId = registered.User.Id;
-        var originalHash = (await _db.Users.FindAsync(userId))!.PasswordHash;
+        var user = await RegisterVerifiedAsync("chpw2@example.com", "correctpass");
+        var originalHash = user.PasswordHash;
 
-        var act = () => _sut.ChangePasswordAsync(userId, new ChangePasswordDto("wrongpass", "newpassword123"));
+        var act = () => _sut.ChangePasswordAsync(user.Id, new ChangePasswordDto("wrongpass", "newpassword123"));
 
         await act.Should().ThrowAsync<ValidationException>()
             .WithMessage("invalid_current_password");
 
-        var user = await _db.Users.FindAsync(userId);
-        user!.PasswordHash.Should().Be(originalHash);
+        var reloaded = await _db.Users.FindAsync(user.Id);
+        reloaded!.PasswordHash.Should().Be(originalHash);
     }
 
     [Fact]
@@ -308,10 +348,9 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task ChangePassword_OldPasswordLoginFails_NewPasswordLoginSucceeds()
     {
-        await _sut.RegisterAsync(new RegisterDto("chpw3@example.com", "oldpassword", "User"));
-        var userId = (await _db.Users.FirstAsync(u => u.Email == "chpw3@example.com")).Id;
+        var user = await RegisterVerifiedAsync("chpw3@example.com", "oldpassword");
 
-        await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+        await _sut.ChangePasswordAsync(user.Id, new ChangePasswordDto("oldpassword", "newpassword123"));
 
         var failAct = () => _sut.LoginAsync(new LoginDto("chpw3@example.com", "oldpassword"));
         await failAct.Should().ThrowAsync<UnauthorizedException>();
@@ -323,11 +362,10 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task ChangePassword_PreChangeRefreshToken_IsRevoked()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("chpw4@example.com", "oldpassword", "User"));
-        var preChangeRefreshToken = registered.RefreshToken;
-        var userId = registered.User.Id;
+        var loggedIn = await RegisterVerifyLoginAsync("chpw4@example.com", "oldpassword");
+        var preChangeRefreshToken = loggedIn.RefreshToken;
 
-        await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+        await _sut.ChangePasswordAsync(loggedIn.User.Id, new ChangePasswordDto("oldpassword", "newpassword123"));
 
         // Revocation ran via ExecuteUpdateAsync — clear stale tracked entities.
         _db.ChangeTracker.Clear();
@@ -339,10 +377,9 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task UpdateProfile_ShouldChangeOnlyProvidedFields()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("profile@example.com", "password123", "Original Name"));
-        var userId = registered.User.Id;
+        var user = await RegisterVerifiedAsync("profile@example.com", name: "Original Name");
 
-        var result = await _sut.UpdateProfileAsync(userId, new UpdateProfileDto("New Name", null, null));
+        var result = await _sut.UpdateProfileAsync(user.Id, new UpdateProfileDto("New Name", null, null));
 
         result.Name.Should().Be("New Name");
         result.DefaultSenderName.Should().BeNull();
@@ -352,11 +389,10 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task UpdateProfile_ShouldClearWhenEmptyString()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("clear@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var user = await RegisterVerifiedAsync("clear@example.com");
 
-        await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "Tobias", "123 Street"));
-        var result = await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "", null));
+        await _sut.UpdateProfileAsync(user.Id, new UpdateProfileDto(null, "Tobias", "123 Street"));
+        var result = await _sut.UpdateProfileAsync(user.Id, new UpdateProfileDto(null, "", null));
 
         result.DefaultSenderName.Should().BeNull();
         result.DefaultSenderAddress.Should().Be("123 Street");
@@ -365,14 +401,13 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task UpdateProfile_ShouldUpdateUpdatedAt()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("updated@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var user = await RegisterVerifiedAsync("updated@example.com");
         var before = DateTime.UtcNow;
 
-        await _sut.UpdateProfileAsync(userId, new UpdateProfileDto(null, "Tobias", null));
+        await _sut.UpdateProfileAsync(user.Id, new UpdateProfileDto(null, "Tobias", null));
 
-        var user = await _db.Users.FindAsync(userId);
-        user!.UpdatedAt.Should().BeOnOrAfter(before);
+        var reloaded = await _db.Users.FindAsync(user.Id);
+        reloaded!.UpdatedAt.Should().BeOnOrAfter(before);
     }
 
     [Fact]
@@ -387,8 +422,8 @@ public class AuthServiceTests : IDisposable
     public async Task DeleteAccount_WithOnlyUnnumberedDrafts_HardDeletesUserAndCascades()
     {
         // No numbered invoice = no Beleg under § 147 AO retention → hard delete (ADR 0005).
-        var registered = await _sut.RegisterAsync(new RegisterDto("delete@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var loggedIn = await RegisterVerifyLoginAsync("delete@example.com");
+        var userId = loggedIn.User.Id;
 
         var invoice = MakeInvoice(userId, InvoiceStatus.Draft, number: null);
         _db.Invoices.Add(invoice);
@@ -414,8 +449,7 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task DeleteAccount_WithFinalizedInvoice_AnonymizesUser_AndKeepsInvoiceWithArchive()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("gobd@example.com", "password123", "Max Mustermann"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("gobd@example.com", "password123", "Max Mustermann")).Id;
 
         // Fill the personal profile so the anonymization has something to erase.
         var liveUser = await _db.Users.FindAsync(userId);
@@ -479,8 +513,7 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task DeleteAccount_Anonymized_LoginFailsForOldAndPlaceholderEmail()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("nologin@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("nologin@example.com", "password123", "User")).Id;
         _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
         await _db.SaveChangesAsync();
 
@@ -498,23 +531,22 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task DeleteAccount_Anonymized_RefreshWithPreDeleteTokenFails()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("norefresh@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var session = await RegisterVerifyLoginAsync("norefresh@example.com", "password123", "User");
+        var userId = session.User.Id;
         _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
         await _db.SaveChangesAsync();
 
         await _sut.DeleteAccountAsync(userId);
         _db.ChangeTracker.Clear();
 
-        var act = () => _sut.RefreshAsync(registered.RefreshToken);
+        var act = () => _sut.RefreshAsync(session.RefreshToken);
         await act.Should().ThrowAsync<UnauthorizedException>();
     }
 
     [Fact]
     public async Task DeleteAccount_Anonymized_MeReturns401()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("me401@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("me401@example.com", "password123", "User")).Id;
         _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
         await _db.SaveChangesAsync();
 
@@ -541,8 +573,7 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task DeleteAccount_Anonymized_ProfileAndPasswordAndSecondDeleteAllThrowUnauthorized()
     {
-        var registered = await _sut.RegisterAsync(new RegisterDto("dead@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("dead@example.com", "password123", "User")).Id;
         _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
         await _db.SaveChangesAsync();
 
@@ -560,19 +591,19 @@ public class AuthServiceTests : IDisposable
     [Fact]
     public async Task DeleteAccount_TwoUsersWithFinalizedInvoices_PlaceholderEmailsDoNotCollide()
     {
-        var first = await _sut.RegisterAsync(new RegisterDto("collide1@example.com", "password123", "User 1"));
-        var second = await _sut.RegisterAsync(new RegisterDto("collide2@example.com", "password123", "User 2"));
-        _db.Invoices.Add(MakeInvoice(first.User.Id, InvoiceStatus.Finalized, "2026-001"));
-        _db.Invoices.Add(MakeInvoice(second.User.Id, InvoiceStatus.Finalized, "2026-001"));
+        var first = await RegisterVerifiedAsync("collide1@example.com", "password123", "User 1");
+        var second = await RegisterVerifiedAsync("collide2@example.com", "password123", "User 2");
+        _db.Invoices.Add(MakeInvoice(first.Id, InvoiceStatus.Finalized, "2026-001"));
+        _db.Invoices.Add(MakeInvoice(second.Id, InvoiceStatus.Finalized, "2026-001"));
         await _db.SaveChangesAsync();
 
         // The unique email index would blow up here if the placeholder were static.
-        await _sut.DeleteAccountAsync(first.User.Id);
-        await _sut.DeleteAccountAsync(second.User.Id);
+        await _sut.DeleteAccountAsync(first.Id);
+        await _sut.DeleteAccountAsync(second.Id);
         _db.ChangeTracker.Clear();
 
-        var emailA = (await _db.Users.FindAsync(first.User.Id))!.Email;
-        var emailB = (await _db.Users.FindAsync(second.User.Id))!.Email;
+        var emailA = (await _db.Users.FindAsync(first.Id))!.Email;
+        var emailB = (await _db.Users.FindAsync(second.Id))!.Email;
         emailA.Should().NotBe(emailB);
         emailA.Should().MatchRegex("^deleted-[0-9a-f]{32}@anonym\\.invalid$");
         emailB.Should().MatchRegex("^deleted-[0-9a-f]{32}@anonym\\.invalid$");
@@ -582,8 +613,7 @@ public class AuthServiceTests : IDisposable
     public async Task DeleteAccount_WithCancelledInvoice_TakesAnonymizationPath_AndKeepsIt()
     {
         // Storno/Cancelled documents are Belege too (ADR 0002) — they trigger retention.
-        var registered = await _sut.RegisterAsync(new RegisterDto("storno@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("storno@example.com", "password123", "User")).Id;
         var cancelled = MakeInvoice(userId, InvoiceStatus.Cancelled, "2026-001");
         _db.Invoices.Add(cancelled);
         await _db.SaveChangesAsync();
@@ -600,8 +630,7 @@ public class AuthServiceTests : IDisposable
     {
         // A reopened draft keeps its sequence number (ADR 0003) — deleting it would
         // tear a gap into the invoice sequence, so it is retained like a Beleg.
-        var registered = await _sut.RegisterAsync(new RegisterDto("reopened@example.com", "password123", "User"));
-        var userId = registered.User.Id;
+        var userId = (await RegisterVerifiedAsync("reopened@example.com", "password123", "User")).Id;
         var reopened = MakeInvoice(userId, InvoiceStatus.Draft, "2026-001");
         _db.Invoices.Add(reopened);
         await _db.SaveChangesAsync();
@@ -637,7 +666,8 @@ public class AuthServiceTests : IDisposable
                 ["Jwt:Audience"] = "invoiceflow",
                 ["Jwt:SigningKey"] = "test-signing-key-for-unit-tests-only-32chars",
                 ["Jwt:AccessTokenMinutes"] = "15",
-                ["Jwt:RefreshTokenDays"] = "30"
+                ["Jwt:RefreshTokenDays"] = "30",
+                ["App:FrontendBaseUrl"] = "http://localhost:3000"
             })
             .Build();
 
