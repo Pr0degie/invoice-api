@@ -91,7 +91,16 @@ same reason.
 via `Email:Smtp*`) and `LogEmailSender` (writes the message + link to the log).
 Selection is by `Email:Provider` — the log-only sender is the default in
 Development and anywhere SMTP isn't explicitly configured. Plain-text, German
-mails; no template framework, no queue — the simplest thing that works.
+mails; no template framework.
+
+**Delivery is decoupled from the request path.** Services enqueue via
+`IEmailQueue` (non-blocking, in-process unbounded `System.Threading.Channels`);
+`EmailBackgroundService` drains the queue and calls `IEmailSender`, logging
+failures instead of propagating them. This was originally inline, but with real
+SMTP the hit path blocked on the round-trip while the miss path didn't — making
+response time an enumeration oracle on `forgot-password` / `resend-verification`
+— and a mail outage failed an otherwise-fine register/reset. Queueing removes
+both: every path just enqueues (or skips) and returns.
 
 ## Consequences
 
@@ -106,3 +115,12 @@ mails; no template framework, no queue — the simplest thing that works.
   branch. When they land, `forgot-password` and `login` should additionally skip
   accounts flagged deleted so a placeholder address can't be driven — a one-line
   guard, noted here so it isn't missed.
+- The e-mail queue is **in-process, with no retry/backoff or persistence** — an
+  unbounded channel drained by a single background worker, right-sized for the
+  current auth-flow mail volume. A process crash drops undelivered messages
+  (acceptable: the user simply re-requests the link). **Follow-up:** if
+  transactional or high-value mail is ever added, replace this with a durable
+  **outbox pattern** — persist the message in the same DB transaction as its
+  triggering change, then have the worker deliver and mark it sent, with retry.
+  That buys at-least-once delivery and survives restarts; deferred until a
+  concrete need justifies the schema + machinery.
