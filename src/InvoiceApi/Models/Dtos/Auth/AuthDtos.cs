@@ -4,7 +4,8 @@ namespace InvoiceApi.Models.Dtos;
 
 public record RegisterDto(
     [Required, EmailAddress] string Email,
-    [Required, MinLength(8)] string Password,
+    // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
+    [Required, MinLength(8), MaxLength(128)] string Password,
     [Required, MinLength(2)] string Name
 );
 
@@ -60,4 +61,5 @@ public record RefreshRequestDto([Required] string RefreshToken);
 
 public record ChangePasswordDto(
     [Required] string CurrentPassword,
-    [Required, MinLength(8)] string NewPassword);
+    // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
+    [Required, MinLength(8), MaxLength(128)] string NewPassword);

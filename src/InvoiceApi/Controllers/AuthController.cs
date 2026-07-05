@@ -70,8 +70,9 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         if (sub is null || !Guid.TryParse(sub, out var userId))
             return Unauthorized();
 
+        // DeletedAt set = anonymized account (ADR 0005) — dead, not a zombie profile.
         var user = await db.Users.FindAsync([userId], ct);
-        if (user is null)
+        if (user is null || user.DeletedAt is not null)
             return Unauthorized();
 
         return Ok(new UserDto(user.Id, user.Email, user.Name, user.CreatedAt,
@@ -113,7 +114,12 @@ public class AuthController(IAuthService authService, AppDbContext db) : Control
         return NoContent();
     }
 
-    /// <summary>Delete the current user's account. Cascades to invoices and refresh tokens.</summary>
+    /// <summary>
+    /// Delete the current user's account. Accounts without numbered invoices are hard-deleted
+    /// (cascades to drafts and refresh tokens). Accounts owning numbered invoices are anonymized
+    /// instead — the invoices and their archives stay under § 147 AO retention (ADR 0005).
+    /// Returns 204 in both cases.
+    /// </summary>
     [HttpDelete("me")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

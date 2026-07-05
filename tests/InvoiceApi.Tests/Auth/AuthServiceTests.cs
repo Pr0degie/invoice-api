@@ -1,9 +1,14 @@
+using System.Security.Claims;
 using FluentAssertions;
+using InvoiceApi.Controllers;
 using InvoiceApi.Data;
 using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using InvoiceApi.Models.Dtos;
 using InvoiceApi.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
@@ -12,22 +17,30 @@ namespace InvoiceApi.Tests.Auth;
 
 public class AuthServiceTests : IDisposable
 {
+    // SQLite in-memory instead of the InMemory provider: AuthService uses
+    // ExecuteDeleteAsync/ExecuteUpdateAsync, which InMemory does not support.
+    private readonly SqliteConnection _connection;
     private readonly AppDbContext _db;
     private readonly AuthService _sut;
+    private readonly IConfiguration _config;
 
     public AuthServiceTests()
     {
+        _connection = new SqliteConnection("DataSource=:memory:");
+        _connection.Open();
+
         var opts = new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseSqlite(_connection)
             .Options;
 
         _db = new AppDbContext(opts);
+        _db.Database.EnsureCreated();
 
-        var config = BuildConfig();
+        _config = BuildConfig();
         var passwordHasher = new BCryptPasswordHasher();
-        var jwtService = new JwtTokenService(config);
+        var jwtService = new JwtTokenService(_config);
 
-        _sut = new AuthService(_db, passwordHasher, jwtService, config,
+        _sut = new AuthService(_db, passwordHasher, jwtService, _config,
             new MemoryCache(new MemoryCacheOptions()));
     }
 
@@ -98,6 +111,37 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.LoginAsync(new LoginDto("nobody@example.com", "somepass"));
 
         await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task Login_WithUnknownEmail_StillVerifiesAgainstDummyHash_WithSameError()
+    {
+        // Timing hardening: the unknown-email path must do the same BCrypt work
+        // as the known-email path, with an identical error message.
+        var recordingHasher = new RecordingPasswordHasher();
+        var sut = new AuthService(_db, recordingHasher, new JwtTokenService(_config), _config,
+            new MemoryCache(new MemoryCacheOptions()));
+
+        var act = () => sut.LoginAsync(new LoginDto("nobody@example.com", "somepass"));
+
+        await act.Should().ThrowAsync<UnauthorizedException>()
+            .WithMessage("Invalid credentials.");
+        // Delegates to real BCrypt — also proves the dummy hash is a valid BCrypt hash.
+        recordingHasher.VerifyCallCount.Should().Be(1);
+    }
+
+    private sealed class RecordingPasswordHasher : IPasswordHasher
+    {
+        private readonly BCryptPasswordHasher _inner = new();
+        public int VerifyCallCount { get; private set; }
+
+        public string Hash(string password) => _inner.Hash(password);
+
+        public bool Verify(string password, string hash)
+        {
+            VerifyCallCount++;
+            return _inner.Verify(password, hash);
+        }
     }
 
     [Fact]
@@ -197,6 +241,10 @@ public class AuthServiceTests : IDisposable
         var act = () => _sut.RefreshAsync(oldRefreshToken);
         await act.Should().ThrowAsync<UnauthorizedException>();
 
+        // The mass revoke runs via ExecuteUpdateAsync (bypasses change tracking) —
+        // clear the tracker so stale tracked entities don't mask the revocation.
+        _db.ChangeTracker.Clear();
+
         // Every session is dead, including the legitimate successor
         (await _db.RefreshTokens.AnyAsync(t => t.UserId == userId && t.RevokedAt == null))
             .Should().BeFalse();
@@ -220,6 +268,10 @@ public class AuthServiceTests : IDisposable
         var userId = registered.User.Id;
 
         await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
+
+        // Token revocation runs via ExecuteUpdateAsync, which bypasses change tracking —
+        // clear the tracker so the assertions read fresh DB state.
+        _db.ChangeTracker.Clear();
 
         var user = await _db.Users.FindAsync(userId);
         new BCryptPasswordHasher().Verify("newpassword123", user!.PasswordHash).Should().BeTrue();
@@ -277,6 +329,9 @@ public class AuthServiceTests : IDisposable
 
         await _sut.ChangePasswordAsync(userId, new ChangePasswordDto("oldpassword", "newpassword123"));
 
+        // Revocation ran via ExecuteUpdateAsync — clear stale tracked entities.
+        _db.ChangeTracker.Clear();
+
         var act = () => _sut.RefreshAsync(preChangeRefreshToken);
         await act.Should().ThrowAsync<UnauthorizedException>();
     }
@@ -329,27 +384,16 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAccount_RemovesUserAndCascadesInvoicesAndRefreshTokens()
+    public async Task DeleteAccount_WithOnlyUnnumberedDrafts_HardDeletesUserAndCascades()
     {
+        // No numbered invoice = no Beleg under § 147 AO retention → hard delete (ADR 0005).
         var registered = await _sut.RegisterAsync(new RegisterDto("delete@example.com", "password123", "User"));
         var userId = registered.User.Id;
 
-        var invoice = new Invoice
-        {
-            UserId = userId,
-            Number = "INV-2026-0001",
-            SenderName = "Sender",
-            SenderAddress = "Addr",
-            RecipientName = "Recipient",
-            RecipientAddress = "Addr",
-            IssueDate = DateOnly.FromDateTime(DateTime.Today),
-            DueDate = DateOnly.FromDateTime(DateTime.Today.AddDays(30)),
-            LineItems = [new LineItem { Description = "Work", Quantity = 1, UnitPrice = 100m }]
-        };
+        var invoice = MakeInvoice(userId, InvoiceStatus.Draft, number: null);
         _db.Invoices.Add(invoice);
         await _db.SaveChangesAsync();
         var invoiceId = invoice.Id;
-        var lineItemId = invoice.LineItems[0].Id;
 
         await _sut.DeleteAccountAsync(userId);
 
@@ -367,6 +411,222 @@ public class AuthServiceTests : IDisposable
         await act.Should().ThrowAsync<UnauthorizedException>();
     }
 
+    [Fact]
+    public async Task DeleteAccount_WithFinalizedInvoice_AnonymizesUser_AndKeepsInvoiceWithArchive()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("gobd@example.com", "password123", "Max Mustermann"));
+        var userId = registered.User.Id;
+
+        // Fill the personal profile so the anonymization has something to erase.
+        var liveUser = await _db.Users.FindAsync(userId);
+        liveUser!.TaxNumber = "12/345/67890";
+        liveUser.VatId = "DE123456789";
+        liveUser.Street = "Musterstraße 1";
+        liveUser.PostalCode = "12345";
+        liveUser.City = "Berlin";
+        liveUser.Country = "Deutschland";
+        liveUser.Phone = "+49 30 123456";
+        liveUser.Iban = "DE89370400440532013000";
+        liveUser.Bic = "COBADEFFXXX";
+        liveUser.BankName = "Commerzbank";
+        liveUser.DefaultSenderName = "Max Mustermann";
+        liveUser.DefaultSenderAddress = "Musterstraße 1, 12345 Berlin";
+
+        var finalized = MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001");
+        var draft = MakeInvoice(userId, InvoiceStatus.Draft, number: null);
+        _db.Invoices.AddRange(finalized, draft);
+        _db.InvoicePdfs.Add(new InvoicePdf { InvoiceId = finalized.Id, Data = [1, 2, 3] });
+        _db.InvoiceXmls.Add(new InvoiceXml { InvoiceId = finalized.Id, Data = [4, 5, 6] });
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        // Draft/token removal runs via ExecuteDeleteAsync (bypasses change tracking).
+        _db.ChangeTracker.Clear();
+
+        // User row survives, but anonymized and explicitly marked.
+        var user = await _db.Users.FindAsync(userId);
+        user.Should().NotBeNull();
+        user!.DeletedAt.Should().NotBeNull();
+        user.Email.Should().StartWith("deleted-").And.EndWith("@anonym.invalid");
+        user.Name.Should().Be("Gelöschtes Konto");
+        user.TaxNumber.Should().BeNull();
+        user.VatId.Should().BeNull();
+        user.Street.Should().BeNull();
+        user.PostalCode.Should().BeNull();
+        user.City.Should().BeNull();
+        user.Country.Should().BeNull();
+        user.Phone.Should().BeNull();
+        user.Iban.Should().BeNull();
+        user.Bic.Should().BeNull();
+        user.BankName.Should().BeNull();
+        user.DefaultSenderName.Should().BeNull();
+        user.DefaultSenderAddress.Should().BeNull();
+
+        // The Beleg survives untouched — snapshot data is part of the document.
+        var kept = await _db.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == finalized.Id);
+        kept.Should().NotBeNull();
+        kept!.SenderName.Should().Be("Max Mustermann");
+        kept.RecipientName.Should().Be("Kunde GmbH");
+        kept.LineItems.Should().HaveCount(1);
+        (await _db.InvoicePdfs.FindAsync(finalized.Id))!.Data.Should().Equal(1, 2, 3);
+        (await _db.InvoiceXmls.FindAsync(finalized.Id))!.Data.Should().Equal(4, 5, 6);
+
+        // Unnumbered draft is gone, sessions are dead.
+        (await _db.Invoices.AnyAsync(i => i.Id == draft.Id)).Should().BeFalse();
+        (await _db.RefreshTokens.CountAsync(t => t.UserId == userId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DeleteAccount_Anonymized_LoginFailsForOldAndPlaceholderEmail()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("nologin@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        var oldEmailAct = () => _sut.LoginAsync(new LoginDto("nologin@example.com", "password123"));
+        await oldEmailAct.Should().ThrowAsync<UnauthorizedException>();
+
+        var placeholderEmail = (await _db.Users.FindAsync(userId))!.Email;
+        var placeholderAct = () => _sut.LoginAsync(new LoginDto(placeholderEmail, "password123"));
+        await placeholderAct.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_Anonymized_RefreshWithPreDeleteTokenFails()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("norefresh@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        var act = () => _sut.RefreshAsync(registered.RefreshToken);
+        await act.Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_Anonymized_MeReturns401()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("me401@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        var controller = new AuthController(_sut, _db)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [new Claim("sub", userId.ToString())], authenticationType: "Test"))
+                }
+            }
+        };
+
+        var result = await controller.Me(default);
+
+        result.Should().BeOfType<UnauthorizedResult>();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_Anonymized_ProfileAndPasswordAndSecondDeleteAllThrowUnauthorized()
+    {
+        var registered = await _sut.RegisterAsync(new RegisterDto("dead@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        _db.Invoices.Add(MakeInvoice(userId, InvoiceStatus.Finalized, "2026-001"));
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        await ((Func<Task>)(() => _sut.UpdateProfileAsync(userId, new UpdateProfileDto("X", null, null))))
+            .Should().ThrowAsync<UnauthorizedException>();
+        await ((Func<Task>)(() => _sut.ChangePasswordAsync(userId, new ChangePasswordDto("password123", "newpassword123"))))
+            .Should().ThrowAsync<UnauthorizedException>();
+        await ((Func<Task>)(() => _sut.DeleteAccountAsync(userId)))
+            .Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_TwoUsersWithFinalizedInvoices_PlaceholderEmailsDoNotCollide()
+    {
+        var first = await _sut.RegisterAsync(new RegisterDto("collide1@example.com", "password123", "User 1"));
+        var second = await _sut.RegisterAsync(new RegisterDto("collide2@example.com", "password123", "User 2"));
+        _db.Invoices.Add(MakeInvoice(first.User.Id, InvoiceStatus.Finalized, "2026-001"));
+        _db.Invoices.Add(MakeInvoice(second.User.Id, InvoiceStatus.Finalized, "2026-001"));
+        await _db.SaveChangesAsync();
+
+        // The unique email index would blow up here if the placeholder were static.
+        await _sut.DeleteAccountAsync(first.User.Id);
+        await _sut.DeleteAccountAsync(second.User.Id);
+        _db.ChangeTracker.Clear();
+
+        var emailA = (await _db.Users.FindAsync(first.User.Id))!.Email;
+        var emailB = (await _db.Users.FindAsync(second.User.Id))!.Email;
+        emailA.Should().NotBe(emailB);
+        emailA.Should().MatchRegex("^deleted-[0-9a-f]{32}@anonym\\.invalid$");
+        emailB.Should().MatchRegex("^deleted-[0-9a-f]{32}@anonym\\.invalid$");
+    }
+
+    [Fact]
+    public async Task DeleteAccount_WithCancelledInvoice_TakesAnonymizationPath_AndKeepsIt()
+    {
+        // Storno/Cancelled documents are Belege too (ADR 0002) — they trigger retention.
+        var registered = await _sut.RegisterAsync(new RegisterDto("storno@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        var cancelled = MakeInvoice(userId, InvoiceStatus.Cancelled, "2026-001");
+        _db.Invoices.Add(cancelled);
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        (await _db.Users.FindAsync(userId))!.DeletedAt.Should().NotBeNull();
+        (await _db.Invoices.AnyAsync(i => i.Id == cancelled.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_ReopenedDraftWithNumber_IsKeptAndTriggersAnonymization()
+    {
+        // A reopened draft keeps its sequence number (ADR 0003) — deleting it would
+        // tear a gap into the invoice sequence, so it is retained like a Beleg.
+        var registered = await _sut.RegisterAsync(new RegisterDto("reopened@example.com", "password123", "User"));
+        var userId = registered.User.Id;
+        var reopened = MakeInvoice(userId, InvoiceStatus.Draft, "2026-001");
+        _db.Invoices.Add(reopened);
+        await _db.SaveChangesAsync();
+
+        await _sut.DeleteAccountAsync(userId);
+        _db.ChangeTracker.Clear();
+
+        (await _db.Users.FindAsync(userId))!.DeletedAt.Should().NotBeNull();
+        (await _db.Invoices.AnyAsync(i => i.Id == reopened.Id)).Should().BeTrue();
+    }
+
+    private static Invoice MakeInvoice(Guid userId, InvoiceStatus status, string? number) => new()
+    {
+        UserId = userId,
+        Number = number,
+        Status = status,
+        SenderName = "Max Mustermann",
+        SenderAddress = "Musterstraße 1, 12345 Berlin",
+        RecipientName = "Kunde GmbH",
+        RecipientAddress = "Kundenweg 2, 54321 Hamburg",
+        IssueDate = DateOnly.FromDateTime(DateTime.Today),
+        DueDate = DateOnly.FromDateTime(DateTime.Today.AddDays(30)),
+        LineItems = [new LineItem { Description = "Work", Quantity = 1, UnitPrice = 100m }]
+    };
+
     // ---
 
     private static IConfiguration BuildConfig() =>
@@ -381,5 +641,9 @@ public class AuthServiceTests : IDisposable
             })
             .Build();
 
-    public void Dispose() => _db.Dispose();
+    public void Dispose()
+    {
+        _db.Dispose();
+        _connection.Dispose();
+    }
 }

@@ -32,6 +32,12 @@ public class User
     public string? Bic { get; set; }
     public string? BankName { get; set; }
 
+    // Set when the account was anonymized instead of hard-deleted (GoBD/§ 147 AO:
+    // the user owned numbered invoices under retention — see ADR 0005). All
+    // personal fields are nulled/replaced at that moment; a non-null DeletedAt
+    // means "this account no longer exists" for every auth-facing endpoint (401).
+    public DateTime? DeletedAt { get; set; }
+
     public ICollection<Invoice> Invoices { get; set; } = new List<Invoice>();
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
 }

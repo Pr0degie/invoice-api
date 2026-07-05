@@ -30,6 +30,11 @@ public class AuthService(
     // instead of 401ing. See docs/adr/0001-refresh-token-rotation-grace.md.
     private const int RotationGraceSeconds = 60;
 
+    // Static cost-12 BCrypt hash (of a throwaway string, matches BCryptPasswordHasher.WorkFactor).
+    // Verified against when the email is unknown so both login paths do the same BCrypt work —
+    // otherwise the response time reveals whether an email is registered.
+    private const string DummyPasswordHash = "$2a$12$nK4B7XO330gbKamdYlUP2uZ4WTpLWLvzxjNPyX5Aov9tAGQ67gOIq";
+
     private static string GraceCacheKey(string tokenHash) => $"refresh-grace:{tokenHash}";
 
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto dto, CancellationToken ct = default)
@@ -64,15 +69,22 @@ public class AuthService(
         var normalizedEmail = dto.Email.ToLowerInvariant();
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, ct);
 
-        if (user is null || !passwordHasher.Verify(dto.Password, user.PasswordHash))
+        if (user is null || user.DeletedAt is not null)
+        {
+            // Timing equalization: do the same BCrypt work as the known-email path.
+            // Anonymized accounts (ADR 0005) take this path too — they are dead.
+            passwordHasher.Verify(dto.Password, DummyPasswordHash);
+            throw new UnauthorizedException("Invalid credentials.");
+        }
+
+        if (!passwordHasher.Verify(dto.Password, user.PasswordHash))
             throw new UnauthorizedException("Invalid credentials.");
 
         // Housekeeping: drop this user's expired refresh tokens
         var now = DateTime.UtcNow;
-        var expiredTokens = await db.RefreshTokens
+        await db.RefreshTokens
             .Where(t => t.UserId == user.Id && t.ExpiresAt < now)
-            .ToListAsync(ct);
-        db.RefreshTokens.RemoveRange(expiredTokens);
+            .ExecuteDeleteAsync(ct);
 
         var (refreshToken, rawToken) = CreateRefreshToken(user.Id);
         db.RefreshTokens.Add(refreshToken);
@@ -88,7 +100,9 @@ public class AuthService(
             .Include(t => t.User)
             .FirstOrDefaultAsync(t => t.Token == tokenHash, ct);
 
-        if (token is null || token.ExpiresAt < DateTime.UtcNow)
+        // Anonymized accounts (ADR 0005) have all their refresh tokens deleted;
+        // the DeletedAt check is belt-and-braces against any straggler.
+        if (token is null || token.ExpiresAt < DateTime.UtcNow || token.User.DeletedAt is not null)
             throw new UnauthorizedException("Invalid or expired refresh token.");
 
         if (token.IsRevoked)
@@ -106,13 +120,10 @@ public class AuthService(
             // someone replayed a token whose successor is already in use. Kill all sessions.
             if (token.ReplacedByTokenHash is not null && !withinGrace)
             {
-                var activeTokens = await db.RefreshTokens
-                    .Where(t => t.UserId == token.UserId && t.RevokedAt == null)
-                    .ToListAsync(ct);
                 var now = DateTime.UtcNow;
-                foreach (var t in activeTokens)
-                    t.RevokedAt = now;
-                await db.SaveChangesAsync(ct);
+                await db.RefreshTokens
+                    .Where(t => t.UserId == token.UserId && t.RevokedAt == null)
+                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
             }
 
             throw new UnauthorizedException("Invalid or expired refresh token.");
@@ -159,9 +170,7 @@ public class AuthService(
 
     public async Task<UserDto> UpdateProfileAsync(Guid userId, UpdateProfileDto dto, CancellationToken ct = default)
     {
-        // Valid JWT but no user row = account deleted → 401 so the client signs out
-        var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new UnauthorizedException("User not found.");
+        var user = await GetActiveUserAsync(userId, ct);
 
         if (dto.Name is not null)
             user.Name = dto.Name == "" ? throw new ValidationException("Name cannot be empty.") : dto.Name.Trim();
@@ -209,35 +218,89 @@ public class AuthService(
 
     public async Task ChangePasswordAsync(Guid userId, ChangePasswordDto dto, CancellationToken ct = default)
     {
-        // Valid JWT but no user row = account deleted → 401 so the client signs out
-        var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new UnauthorizedException("User not found.");
+        var user = await GetActiveUserAsync(userId, ct);
 
         if (!passwordHasher.Verify(dto.CurrentPassword, user.PasswordHash))
             throw new ValidationException("invalid_current_password");
 
         user.PasswordHash = passwordHasher.Hash(dto.NewPassword);
         user.UpdatedAt = DateTime.UtcNow;
-
-        var activeTokens = await db.RefreshTokens
-            .Where(t => t.UserId == userId && t.RevokedAt == null)
-            .ToListAsync(ct);
+        await db.SaveChangesAsync(ct);
 
         var now = DateTime.UtcNow;
-        foreach (var t in activeTokens)
-            t.RevokedAt = now;
-
-        await db.SaveChangesAsync(ct);
+        await db.RefreshTokens
+            .Where(t => t.UserId == userId && t.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
     }
 
     public async Task DeleteAccountAsync(Guid userId, CancellationToken ct = default)
     {
-        // Valid JWT but no user row = account deleted → 401 so the client signs out
-        var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new UnauthorizedException("User not found.");
+        var user = await GetActiveUserAsync(userId, ct);
 
-        db.Users.Remove(user);
+        // GoBD/§ 147 AO (ADR 0005): numbered invoices are Buchungsbelege under an
+        // 8-year retention duty — they must survive account deletion. "Numbered"
+        // covers Finalized/Paid/Cancelled AND reopened drafts, which keep their
+        // number (ADR 0003) and therefore their slot in the invoice sequence.
+        var hasRetainedInvoices = await db.Invoices.AnyAsync(
+            i => i.UserId == userId && (i.Status != InvoiceStatus.Draft || i.Number != null), ct);
+
+        if (!hasRetainedInvoices)
+        {
+            // Common case (test accounts, never finalized anything): hard delete.
+            // FK cascades take the drafts, line items and refresh tokens with it.
+            db.Users.Remove(user);
+            await db.SaveChangesAsync(ct);
+            return;
+        }
+
+        // Anonymization path: erase the person, keep the Belege (ADR 0005).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        // Unnumbered drafts have no Beleg character — hard delete (cascades to line items).
+        await db.Invoices
+            .Where(i => i.UserId == userId && i.Status == InvoiceStatus.Draft && i.Number == null)
+            .ExecuteDeleteAsync(ct);
+
+        // Kill every session; combined with the invalidated password hash and the
+        // DeletedAt guard in LoginAsync, the account is unreachable from now on.
+        await db.RefreshTokens
+            .Where(t => t.UserId == userId)
+            .ExecuteDeleteAsync(ct);
+
+        // Non-reversible placeholder; GUID keeps the unique email index happy and
+        // .invalid (RFC 2606) guarantees the address can never be routed or re-registered.
+        user.Email = $"deleted-{Guid.NewGuid():N}@anonym.invalid";
+        // Hash of a random 256-bit throwaway value nobody knows — stays a valid
+        // BCrypt hash (no Verify() foot-gun) but can never be matched.
+        user.PasswordHash = passwordHasher.Hash(
+            Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)));
+        user.Name = "Gelöschtes Konto";
+        user.DefaultSenderName = null;
+        user.DefaultSenderAddress = null;
+        user.TaxNumber = null;
+        user.VatId = null;
+        user.Street = null;
+        user.PostalCode = null;
+        user.City = null;
+        user.Country = null;
+        user.Phone = null;
+        user.Iban = null;
+        user.Bic = null;
+        user.BankName = null;
+        user.DeletedAt = DateTime.UtcNow;
+        user.UpdatedAt = DateTime.UtcNow;
+
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    // Valid JWT but no live user row = account deleted/anonymized → 401 so the client signs out.
+    private async Task<User> GetActiveUserAsync(Guid userId, CancellationToken ct)
+    {
+        var user = await db.Users.FindAsync([userId], ct);
+        if (user is null || user.DeletedAt is not null)
+            throw new UnauthorizedException("User not found.");
+        return user;
     }
 
     private AuthResponseDto BuildAuthResponse(User user, string refreshToken)

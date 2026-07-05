@@ -244,8 +244,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         if (invoice.ServiceDate is null && invoice.ServicePeriodStart is null)
             throw new ConflictException("A service date or service period is required to finalize (§ 14 Abs. 4 UStG).");
 
-        var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new UnauthorizedException("User not found.");
+        var user = await db.Users.FindAsync([userId], ct);
+        if (user is null || user.DeletedAt is not null) // anonymized account (ADR 0005) = gone
+            throw new UnauthorizedException("User not found.");
         EnsureSenderProfileComplete(user);
         EnsureRecipientComplete(invoice);
 
@@ -345,8 +346,9 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
                 ? "Paid invoices must be set back to Finalized before cancelling."
                 : "Only finalized invoices can be cancelled.");
 
-        var user = await db.Users.FindAsync([userId], ct)
-            ?? throw new UnauthorizedException("User not found.");
+        var user = await db.Users.FindAsync([userId], ct);
+        if (user is null || user.DeletedAt is not null) // anonymized account (ADR 0005) = gone
+            throw new UnauthorizedException("User not found.");
 
         var storno = new Invoice
         {
