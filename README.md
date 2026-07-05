@@ -77,6 +77,14 @@ the same generic `200` regardless of whether the address exists. In Development,
 mails (incl. the link) are written to the log — no SMTP needed. See
 [`docs/adr/0006`](docs/adr/0006-password-reset-and-email-verification.md).
 
+`register`, `forgot-password` and `resend-verification` accept an optional
+`locale` (`"de"` | `"en"`; anything else or absent → `de`). It localizes the mail
+(subject + body) and is embedded as an explicit path segment in the link
+(`{FRONTEND_BASE_URL}/{locale}/verify-email?token=…`, likewise `/reset-password`)
+so next-intl (`localePrefix: "as-needed"`) lands the user on their own language.
+The value is normalized against the allowlist before it touches the URL — never a
+free string.
+
 ### Invoice endpoints (require Bearer token)
 
 All `/api/invoices/*` endpoints return 401 without a valid JWT.
