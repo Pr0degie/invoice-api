@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      # TODO: switch to `dotnet build --no-restore -warnaserror` once the last
+      # remaining warning is fixed: CS0618 in src/InvoiceApi/Services/PdfService.cs
+      # (QuestPDF `MinimalBox()` is obsolete, rename to `Shrink()`).
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+  vulnerability-scan:
+    name: Vulnerable dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      # `dotnet list package --vulnerable` exits 0 even when it finds
+      # vulnerabilities (SDK 8.x), so we grep the output and fail explicitly.
+      - name: Scan for vulnerable packages (fails on findings)
+        run: |
+          dotnet list package --vulnerable --include-transitive 2>&1 | tee vulnerable-packages.txt
+          if grep -q "has the following vulnerable packages" vulnerable-packages.txt; then
+            echo "::error::Vulnerable NuGet packages found (see log above). Update the affected packages."
+            exit 1
+          fi
+          echo "No vulnerable packages found."

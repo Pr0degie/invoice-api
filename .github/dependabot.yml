@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Group minor + patch bumps into a single weekly PR so we don't get
+    # one PR per package; majors stay as individual PRs.
+    groups:
+      nuget-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
