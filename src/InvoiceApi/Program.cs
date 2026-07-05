@@ -45,6 +45,12 @@ if (string.Equals(builder.Configuration["Email:Provider"], "Smtp", StringCompari
 else
     builder.Services.AddScoped<IEmailSender, LogEmailSender>();
 
+// Delivery is decoupled from the request path: services enqueue, a background
+// worker drains the queue and sends. Keeps SMTP latency/failures off the auth
+// endpoints (no enumeration oracle, no request failure on a mail outage).
+builder.Services.AddSingleton<IEmailQueue, ChannelEmailQueue>();
+builder.Services.AddHostedService<EmailBackgroundService>();
+
 // JWT auth — key presence/strength is validated at startup below; no fallback here
 var jwtSection = builder.Configuration.GetSection("Jwt");
 var signingKey = builder.Configuration["Jwt:SigningKey"]

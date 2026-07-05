@@ -26,7 +26,7 @@ public class AuthService(
     AppDbContext db,
     IPasswordHasher passwordHasher,
     IJwtTokenService jwtTokenService,
-    IEmailSender emailSender,
+    IEmailQueue emailQueue,
     IConfiguration config,
     IMemoryCache cache) : IAuthService
 {
@@ -86,7 +86,7 @@ public class AuthService(
         var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.EmailVerification, EmailVerificationTtl, ct);
         await db.SaveChangesAsync(ct);
 
-        await SendVerificationEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
+        QueueVerificationEmail(user, rawToken, NormalizeLocale(dto.Locale));
 
         return new MessageResponseDto(
             "Registrierung erfolgreich. Bitte bestätige deine E-Mail-Adresse über den zugesandten Link.");
@@ -195,11 +195,15 @@ public class AuthService(
         {
             var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.PasswordReset, PasswordResetTtl, ct);
             await db.SaveChangesAsync(ct);
-            await SendPasswordResetEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
+            QueuePasswordResetEmail(user, rawToken, NormalizeLocale(dto.Locale));
         }
         else
         {
-            // Burn comparable work so the miss path isn't a timing oracle.
+            // The dominant timing gap — an inline SMTP round-trip on the hit path —
+            // is gone now that delivery is queued (both paths just enqueue/skip and
+            // return). This keeps the cheap token-generation work symmetric too, so
+            // neither the body nor the response time discloses whether the address
+            // is registered.
             _ = SecureToken.Generate();
         }
 
@@ -246,7 +250,7 @@ public class AuthService(
         {
             var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.EmailVerification, EmailVerificationTtl, ct);
             await db.SaveChangesAsync(ct);
-            await SendVerificationEmailAsync(user, rawToken, NormalizeLocale(dto.Locale), ct);
+            QueueVerificationEmail(user, rawToken, NormalizeLocale(dto.Locale));
         }
         else
         {
@@ -302,7 +306,7 @@ public class AuthService(
     // even for the default locale: next-intl with localePrefix "as-needed" serves
     // prefixed URLs for every locale, and being explicit is more robust than
     // re-deriving the frontend's prefix rules here. `locale` is pre-normalized.
-    private Task SendVerificationEmailAsync(User user, string rawToken, string locale, CancellationToken ct)
+    private void QueueVerificationEmail(User user, string rawToken, string locale)
     {
         var link = $"{FrontendBaseUrl()}/{locale}/verify-email?token={rawToken}";
         var (subject, body) = locale == "en"
@@ -320,10 +324,10 @@ public class AuthService(
                 "Der Link ist 24 Stunden gültig.\n\n" +
                 "Wenn du dich nicht bei InvoiceFlow registriert hast, kannst du diese E-Mail ignorieren.\n\n" +
                 "Viele Grüße\nDein InvoiceFlow-Team");
-        return emailSender.SendAsync(user.Email, subject, body, ct);
+        emailQueue.Enqueue(new EmailMessage(user.Email, subject, body));
     }
 
-    private Task SendPasswordResetEmailAsync(User user, string rawToken, string locale, CancellationToken ct)
+    private void QueuePasswordResetEmail(User user, string rawToken, string locale)
     {
         var link = $"{FrontendBaseUrl()}/{locale}/reset-password?token={rawToken}";
         var (subject, body) = locale == "en"
@@ -343,7 +347,7 @@ public class AuthService(
                 "Der Link ist 1 Stunde gültig.\n\n" +
                 "Wenn du das nicht warst, ignoriere diese E-Mail — dein Passwort bleibt unverändert.\n\n" +
                 "Viele Grüße\nDein InvoiceFlow-Team");
-        return emailSender.SendAsync(user.Email, subject, body, ct);
+        emailQueue.Enqueue(new EmailMessage(user.Email, subject, body));
     }
 
     private string FrontendBaseUrl() =>

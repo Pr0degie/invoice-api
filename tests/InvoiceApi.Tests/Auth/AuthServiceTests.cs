@@ -13,7 +13,7 @@ namespace InvoiceApi.Tests.Auth;
 public class AuthServiceTests : IDisposable
 {
     private readonly AppDbContext _db;
-    private readonly CapturingEmailSender _email = new();
+    private readonly CapturingEmailQueue _email = new();
     private readonly AuthService _sut;
 
     public AuthServiceTests()
