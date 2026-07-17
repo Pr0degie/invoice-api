@@ -2,6 +2,43 @@
 
 ## Prompt 17 — .NET 8 → .NET 10 LTS Upgrade (2026-07-17)
 
+### Umgesetzt
+
+- **TFM `net8.0` → `net10.0`** in beiden csproj. Pakete: JwtBearer +
+  EFCore.Design 8.0.28 → 10.0.10, Npgsql.EFCore 8.0.11 → 10.0.3,
+  Serilog.AspNetCore 8.0.3 → 10.0.0 (erzwang Sinks.Console 5.0.1 → 6.1.1,
+  NU1605), Tests: EFCore.InMemory/Sqlite → 10.0.10, Test.Sdk 17.14.1 → 18.8.1.
+  QuestPDF/MailKit/ZUGFeRD/BCrypt/Swashbuckle **unverändert** (laufen unter
+  net10.0, kein Bump um des Bumps willen).
+- **Einziger Codefix:** `KnownNetworks.Clear()` → `KnownIPNetworks.Clear()`
+  in `Program.cs` (ASP.NET-Core-10-Obsoletion, s. Recherche unten).
+- **Dockerfile:** `sdk:10.0`/`aspnet:10.0`. Die 10.0-Images sind **Ubuntu
+  24.04** (Debian eingestellt) — `adduser` fehlt im Runtime-Image, deshalb
+  jetzt der in den .NET-Images eingebaute Non-Root-User `app` statt des
+  selbst angelegten `appuser`. fontconfig/fonts-liberation unverändert.
+- **CI:** `setup-dotnet` 8.0.x → 10.0.x in beiden Jobs, Scan-Job unverändert.
+- **ADR 0007** (`docs/adr/0007-dotnet-10-lts-upgrade.md`): .NET 10 LTS statt
+  9 — 9 hat dasselbe EOL-Datum wie 8 (10.11.2026), 10 läuft bis Nov 2028.
+- **Verifikation:** `dotnet build -warnaserror` 0 Warnungen; **191/191 Tests
+  grün** (CLAUDE.md-Testzahlen auf 191 konsolidiert); Container-Smoke-Test
+  gegen `docker compose`: Register → Verify (Token aus Log) → Login →
+  Profil-PATCH → Rechnung anlegen (Umlaute) → Finalize (`2026-001`) → PDF
+  mit **eingebetteten Liberation-Fonts** (kein textloser Render unter
+  Ubuntu-Basis) → XRechnung-CII-XML → Swagger UI (20 Pfade). Auth-Rate-Limit
+  (5/min) griff dabei nachweislich.
+- Lokales SDK: 10.0.302 (user-lokal `%USERPROFILE%\.dotnet10`, da der
+  Maschinen-Install nur SDK 8/9 hat — für Builds `DOTNET_ROOT`/`PATH`
+  entsprechend setzen oder SDK 10 systemweit nachinstallieren).
+
+### Offen / ADR-Kandidat
+
+- **Swashbuckle 6.9.0 → Microsoft.AspNetCore.OpenApi (oder Swashbuckle 10.x):**
+  6.9.0 baut und läuft unter net10.0 (Swagger UI verifiziert), hängt aber an
+  Microsoft.OpenApi 1.x, während das ASP.NET-Core-10-Ökosystem auf OpenApi 2.x
+  (OpenAPI 3.1) umgestellt hat. Bewusst NICHT Teil dieser Session —
+  eigene Entscheidung mit eigenem ADR, wenn `Swagger:Enabled`-Flag für
+  Production (CLAUDE.md §7) angegangen wird.
+
 ### Breaking-Changes-Recherche (Evidenz, vor dem Umbau erhoben)
 
 Quellen: offizielle Breaking-Changes-Listen .NET 9 + 10, ASP.NET Core 9 + 10,

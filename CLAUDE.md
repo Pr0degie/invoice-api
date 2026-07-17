@@ -22,7 +22,7 @@ Adapt placeholders marked `<…>` based on the audit. Keep wording terse — eve
 ````markdown
 # CLAUDE.md — invoice-api
 
-ASP.NET Core 8 backend for InvoiceFlow. Frontend (Next.js) lives in `../invoiceflow/`.
+ASP.NET Core 10 backend for InvoiceFlow. Frontend (Next.js) lives in `../invoiceflow/`.
 Read top-to-bottom before touching code. §3 and §4 are non-negotiable.
 
 ---
@@ -52,13 +52,13 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 
 | | |
 |---|---|
-| Framework | ASP.NET Core 8 (Minimal hosting + Controllers) |
-| ORM | EF Core 8 + Npgsql |
+| Framework | ASP.NET Core 10 LTS (Minimal hosting + Controllers) — see ADR 0007 |
+| ORM | EF Core 10 + Npgsql |
 | DB | PostgreSQL (Docker locally, Coolify-managed in prod) |
 | Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + custom refresh-token store |
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
-| Testing | xUnit + EF Core InMemory (service-level, no WebApplicationFactory), 141 tests |
+| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 191 tests |
 
 ````
 src/InvoiceApi/
@@ -171,7 +171,7 @@ A two-line clarification beats half a day of rework. Stop and ask when:
 
 ````bash
 wc -l CLAUDE.md
-dotnet test                          # all 111 must still pass — no code changed, but sanity check
+dotnet test                          # all 191 must still pass — no code changed, but sanity check
 ````
 
 Expected: `CLAUDE.md` ≤ 130 lines.
