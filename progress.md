@@ -1,5 +1,70 @@
 # Progress
 
+## Prompt 17 — .NET 8 → .NET 10 LTS Upgrade (2026-07-17)
+
+### Breaking-Changes-Recherche (Evidenz, vor dem Umbau erhoben)
+
+Quellen: offizielle Breaking-Changes-Listen .NET 9 + 10, ASP.NET Core 9 + 10,
+EF Core 9 + 10, Npgsql-Release-Notes 9 + 10 (EF- und ADO-Ebene). Zwei
+Major-Sprünge — beide Listen gelten kumulativ. Bewertung gegen dieses Repo:
+
+**Treffer (JA):**
+
+- **EF9: `MigrateAsync()` wirft bei pending model changes** — wir migrieren
+  beim Start (`Program.cs`). Jede Model-Änderung ohne generierte Migration
+  lässt den Boot künftig hart fehlschlagen (`PendingModelChangesWarning`).
+  Kein Codefix nötig, aber neue Disziplin: Model-Change ⇒ sofort Migration.
+  Positiver Nebeneffekt: EF9+ lockt Migrationen gegen konkurrierende Replikas.
+- **ASP.NET Core 10: `ForwardedHeadersOptions.KnownNetworks` obsolet**
+  (Umstieg auf `KnownIPNetworks`, `System.Net.IPNetwork`) — wir rufen
+  `KnownNetworks.Clear()` in `Program.cs` auf; mit `-warnaserror` ein
+  Build-Brecher. Einziger nötiger Codefix im Repo.
+- **.NET 10 Container-Images sind Ubuntu 24.04 „Noble"** — Debian-Varianten
+  gibt es für .NET 10 nicht mehr. `apt-get` im Dockerfile trifft Ubuntu-Repos;
+  `fontconfig`/`fonts-liberation` heißen dort gleich. PDF-Font-Rendering muss
+  im Container verifiziert werden (nicht nur der Build).
+- **SDK 10: `dotnet restore` auditiert auch transitive Pakete** — neue
+  NU1902/NU1903-Warnungen können mit `-warnaserror` den Build brechen,
+  wenn eine Advisory auftaucht (deckt sich inhaltlich mit unserem
+  Vulnerability-Scan-Job).
+- **.NET 9: DI-Validierung (`ValidateOnBuild`/`ValidateScopes`) im
+  Development-Env aktiv** — Scoped-in-Singleton-Fehler knallen jetzt beim
+  Start. Unser `EmailBackgroundService` bezieht scoped Services korrekt über
+  Scope-Factory; verifiziert durch Container-Start (Development).
+
+**Prüfen (durch Build/Tests/Smoke-Test abgedeckt):**
+
+- Swashbuckle 6.9.0 unter net10.0: hängt an Microsoft.OpenApi 1.x, ASP.NET
+  Core 10 bringt OpenApi 2.x-Ökosystem. Entscheid per Build + `/swagger`-Test.
+- Microsoft.Data.Sqlite 10 (nur Testprojekt): `DateTime`/`DateTimeOffset`
+  ohne Offset gilt beim Lesen jetzt als UTC statt Local — kann
+  Zeitzonen-Asserts in den SQLite-basierten `AuthServiceTests` kippen
+  (Escape-Hatch: AppContext-Switch `Pre10TimeZoneHandling`).
+- STJ validiert Property-Namen-Konflikte in DTOs; Config-Binder behält
+  `null`-Werte in Arrays (`Cors:AllowedOrigins`). Beides testabgedeckt.
+- EF10: `Contains`-Queries erzeugen `IN (@p1,…)` statt Array-Param;
+  SQL-Parameternamen vereinfacht — nur relevant für SQL-Snapshots (haben wir
+  nicht).
+- Npgsql EF 9: Guid-PKs werden clientseitig als **UUIDv7** (sequentiell)
+  statt v4 generiert — funktional harmlos, bessere Index-Lokalität.
+
+**Nicht-Treffer (geprüft, betrifft uns nicht):** BinaryFormatter-Entfernung
+(ungenutzt), HttpClientFactory-Änderungen (keine ausgehenden HTTP-Calls),
+JwtBearer-Handler (keine gelisteten Breaking Changes in 9/10; transitive
+IdentityModel-Bumps durch Testsuite abgedeckt), Serilog-Request-Logging
+(kein Breaking Change; `Serilog.AspNetCore` 10.0.0 ist das zu net10.0
+passende Major), Rate-Limiting-Stack (keine Änderungen), Kestrel/TLS
+(terminiert Traefik), Cookie-Auth-Redirects (Bearer-only), Postgres-Enums /
+`MapEnum` (Enums sind STJ-Strings), EF-Migrate-in-Transaktion (wir wrappen
+nicht), Cosmos/SQL-Server-Punkte, `date`/`time`→`DateOnly`-ADO-Mapping (nur
+Raw-SQL, haben wir nicht), Sync-API-Deprecation Npgsql 10 (wir sind async).
+
+**Paket-Kompatibilität:** QuestPDF 2024.12.3, MailKit 4.17.0, ZUGFeRD-csharp
+18.0.0, BCrypt.Net-Next 4.2.0 laden unter net10.0 (net6+/netstandard2.0-
+Targets) — kein Bump nötig. QuestPDF braucht seit 2024.3 kein fontconfig mehr
+(eigene native Builds); der Font-Fix im Dockerfile bleibt trotzdem nötig,
+weil das aspnet-Image keine Fonts mitbringt.
+
 ## Pre-Launch-Hardening — Mail-Config, MailKit, Warnings, Coolify (2026-07-05)
 
 Backend-Hälfte der Deploy-Vorbereitung (Frontend-Hälfte in
