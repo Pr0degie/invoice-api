@@ -1,25 +1,3 @@
-# invoice-api/CLAUDE.md — Refactor + Updates
-
-Slim, single-file CLAUDE.md for the backend. Backend is small enough that a docs/ split adds overhead, not value. Goal: ~120 lines, everything an agent needs in one read.
-
----
-
-## Step 1 — Read the existing file
-
-Read the current `CLAUDE.md` in this repo. Identify:
-- Any project-specific conventions worth keeping (naming, folder layout, test patterns).
-- Anything outdated (mentions of OAuth-only auth, COUNT-based numbering, hardcoded CORS, missing `Cancelled` status).
-- Anything redundant with what the code already enforces (e.g. .editorconfig rules).
-
-Print a short audit table (KEEP / UPDATE / DROP / MISSING) before rewriting.
-
----
-
-## Step 2 — Replace the file with this structure
-
-Adapt placeholders marked `<…>` based on the audit. Keep wording terse — every line must earn its place.
-
-````markdown
 # CLAUDE.md — invoice-api
 
 ASP.NET Core 10 backend for InvoiceFlow. Frontend (Next.js) lives in `../invoiceflow/`.
@@ -59,17 +37,6 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
 | Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 191 tests |
-
-````
-src/InvoiceApi/
-  Controllers/      AuthController, InvoicesController
-  Services/         InvoiceService, AuthService, RefreshTokenService, SeedService
-  Data/             InvoiceApiDbContext, Migrations/
-  Entities/         User, Invoice, LineItem, RefreshToken, InvoiceNumberSequence, InvoicePdf
-  Dtos/             *Request, *Response (no entity leaks across the boundary)
-  Program.cs        DI, middleware pipeline, CORS, JWT setup
-tests/InvoiceApi.Tests/
-````
 
 ---
 
@@ -163,30 +130,3 @@ A two-line clarification beats half a day of rework. Stop and ask when:
 - A new endpoint would change the response shape of an existing one.
 - A migration would touch existing rows (data migration vs schema migration).
 - You're tempted to bypass `_db.Invoices.Where(i => i.UserId == userId)` for any reason.
-````
-
----
-
-## Step 3 — Verify
-
-````bash
-wc -l CLAUDE.md
-dotnet test                          # all 191 must still pass — no code changed, but sanity check
-````
-
-Expected: `CLAUDE.md` ≤ 130 lines.
-
----
-
-## Step 4 — Report
-
-1. Audit table from Step 1 (KEEP / UPDATE / DROP / MISSING).
-2. Final line count.
-3. Anything from the old file that didn't survive — with one-line reason each.
-4. Any conflict between the template and existing project conventions (e.g. the template says "Controllers" but the repo uses Minimal API endpoints) — flag it, don't silently override.
-
-**Commit:**
-````
-chore(docs): rewrite CLAUDE.md — slim, single-file, reflects per-user
-numbering, config-driven CORS, logout body shape, and current TODOs
-````
