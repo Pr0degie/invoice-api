@@ -89,3 +89,6 @@ system should not take implicitly. A correction = Storno + new invoice.
 - The Docker image must ship fonts (fontconfig + fonts-liberation); without
   them SkiaSharp renders text-less PDFs. Discovered during this work — the
   old on-the-fly PDFs had the same defect in containers.
+  *Update 2026-07-17 (ADR 0007):* base image is Ubuntu 24.04 since the
+  .NET 10 upgrade (Debian variants discontinued); same packages, same fix —
+  font-embedded rendering re-verified in the container.

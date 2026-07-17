@@ -3,7 +3,7 @@
 REST API for creating invoices and exporting them as PDF plus German E-Rechnung (XRechnung / EN 16931) — built because every client eventually needs this and the existing solutions are either overpriced SaaS or a mess.
 
 ![CI](https://github.com/Pr0degie/invoice-api/actions/workflows/ci.yml/badge.svg)
-![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)
 
 ---
@@ -22,7 +22,7 @@ REST API for creating invoices and exporting them as PDF plus German E-Rechnung 
 
 | Layer | Tech |
 |---|---|
-| Runtime | .NET 8 / ASP.NET Core |
+| Runtime | .NET 10 LTS / ASP.NET Core |
 | Database | PostgreSQL + EF Core |
 | PDF | QuestPDF |
 | E-Rechnung | ZUGFeRD-csharp (XRechnung CII) |
@@ -34,7 +34,7 @@ REST API for creating invoices and exporting them as PDF plus German E-Rechnung 
 
 ## Getting started
 
-**Prerequisites:** Docker, .NET 8 SDK
+**Prerequisites:** Docker, .NET 10 SDK
 
 ```bash
 git clone https://github.com/Pr0degie/invoice-api

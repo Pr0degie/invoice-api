@@ -85,7 +85,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(opts =>
 {
     opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     // The proxy IPs aren't statically known — clear the loopback-only defaults.
-    opts.KnownNetworks.Clear();
+    // (KnownIPNetworks replaced the obsolete KnownNetworks in ASP.NET Core 10.)
+    opts.KnownIPNetworks.Clear();
     opts.KnownProxies.Clear();
 });
 
