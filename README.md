@@ -176,7 +176,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-191 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, auth flows (incl. e-mail verification, password reset, and anti-enumeration), and the fail-fast e-mail/SMTP startup validation.
+197 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, auth flows (incl. e-mail verification, password reset, and anti-enumeration), the refresh-token cleanup rule, and the fail-fast e-mail/SMTP startup validation.
 
 ---
 

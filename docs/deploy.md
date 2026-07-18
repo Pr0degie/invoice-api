@@ -41,6 +41,7 @@ One line per variable: what it does, and whether you must set it.
 | `Seed__Enabled` | `true` seeds the demo account (`demo@invoiceflow.app`) once on an empty database. Default in Production is `false`; enable only on the demo instance. |
 | `Jwt__Issuer` / `Jwt__Audience` | Token issuer/audience, defaults `invoice-api` / `invoiceflow`. Leave as-is unless you run multiple instances. |
 | `Jwt__AccessTokenMinutes` / `Jwt__RefreshTokenDays` | Token lifetimes, defaults `15` / `30`. |
+| `RefreshTokenCleanup__Interval` / `RefreshTokenCleanup__Retention` | Background cleanup of expired/revoked refresh tokens, defaults `06:00:00` (run every 6 h) / `7.00:00:00` (keep 7 days past expiry/revocation). Leave as-is. |
 | `ASPNETCORE_URLS` | Listen address inside the container, `http://0.0.0.0:8080`. The Dockerfile already exposes 8080; TLS terminates at Coolify's proxy. |
 
 Health check endpoint for Coolify: `GET /health` (returns 503 while the

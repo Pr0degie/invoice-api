@@ -1,5 +1,28 @@
 # Progress
 
+## Prompt 18 — Refresh-Token-Cleanup-Job (2026-07-18)
+
+### Umgesetzt
+
+- **`RefreshTokenCleanupService`** (`Services/`): `BackgroundService` nach dem
+  `EmailBackgroundService`-Muster (Scope pro Lauf, Fehler geloggt statt
+  propagiert, sauberer Shutdown). `PeriodicTimer`, erster Lauf sofort beim
+  Start. Löscht per `ExecuteDeleteAsync` (ein Statement) Tokens, deren
+  `ExpiresAt` **oder** `RevokedAt` länger als die Retention zurückliegt.
+- **`RefreshTokenCleanupOptions`**: Section `RefreshTokenCleanup`, Defaults
+  6 h Interval / 7 d Retention (greifen ohne Config-Eintrag; Section in
+  `appsettings.json` explizit für Coolify-Overrides). Retention ≫
+  `RotationGraceSeconds` (60 s) — die Rotations-Gnadenfrist bleibt unberührt.
+- **Tests: 197 grün** (191 → +6). Löschregel direkt über das statische
+  `CleanupAsync` getestet (SQLite in-memory, da `ExecuteDeleteAsync` den
+  InMemory-Provider nicht unterstützt): abgelaufen-alt ✓ gelöscht,
+  revoked-alt ✓ gelöscht, gültig / frisch abgelaufen / frisch revoked
+  (Grace-Schutz) ✓ behalten, Mischbestand über zwei User ✓ nur die
+  richtigen Rows + korrekter Rückgabewert.
+- **Doku:** CLAUDE.md-TODO ersetzt (§5) und Follow-up-Eintrag entfernt (§7),
+  Testzahl 191 → 197 (CLAUDE.md, README), `docs/deploy.md` um die optionalen
+  `RefreshTokenCleanup__*`-Env-Vars ergänzt.
+
 ## Prompt 17 — .NET 8 → .NET 10 LTS Upgrade (2026-07-17)
 
 ### Umgesetzt

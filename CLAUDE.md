@@ -36,7 +36,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 | Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + custom refresh-token store |
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
-| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 191 tests |
+| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 197 tests |
 
 ---
 
@@ -84,7 +84,9 @@ PATCH /api/auth/me       { tax profile fields }                       → UserDt
 
 `AuthResponse = { token, refreshToken, expiresAt, user }`.
 Access tokens: short-lived (15 min). Refresh tokens: 30 days, single-use, rotated on every refresh.
-Refresh tokens stored in DB (`RefreshTokens` table) with `RevokedAt`. **Cleanup job for expired tokens is a TODO.**
+Refresh tokens stored in DB (`RefreshTokens` table) with `RevokedAt`. `RefreshTokenCleanupService`
+(a `BackgroundService`, first run at startup) hard-deletes tokens expired/revoked longer than the
+retention — options section `RefreshTokenCleanup`, defaults 6 h interval / 7 d retention.
 
 - **E-mail verification (ADR 0006):** register creates the user `EmailVerifiedAt=null` and issues
   **no session** — it mails a 24 h verify link; login stays blocked (`403 email_not_verified`) until
@@ -118,7 +120,6 @@ These are tracked here so the next agent picks the right one:
 
 - [ ] **Coolify staging deploy** — first production push to the Hetzner VPS. Env-var checklist: `docs/deploy.md`.
 - [ ] **Swagger in Production** — currently disabled. Enable behind a flag (`Swagger:Enabled` config) for portfolio visibility.
-- [ ] **Refresh-token cleanup job** — background `IHostedService` to delete tokens where `ExpiresAt < UtcNow - 7 days`.
 - [ ] **Rate limiting** — currently global. Per-user limits (after auth middleware) would be safer.
 - [ ] **E-mail outbox** — delivery is queued in-process (`IEmailQueue`, no retry/persistence); a crash drops undelivered mail. If transactional/high-value mail is ever added, move to a durable outbox (persist in the triggering DB tx, worker delivers + marks sent, with retry). See ADR 0006 Consequences.
 
