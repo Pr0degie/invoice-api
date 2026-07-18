@@ -55,6 +55,12 @@ else
 builder.Services.AddSingleton<IEmailQueue, ChannelEmailQueue>();
 builder.Services.AddHostedService<EmailBackgroundService>();
 
+// Expired/old-revoked refresh tokens are hard-deleted periodically — rotation
+// and logout only revoke, so the table would otherwise grow unbounded.
+builder.Services.Configure<RefreshTokenCleanupOptions>(
+    builder.Configuration.GetSection("RefreshTokenCleanup"));
+builder.Services.AddHostedService<RefreshTokenCleanupService>();
+
 // JWT auth — key presence/strength is validated at startup below; no fallback here
 var jwtSection = builder.Configuration.GetSection("Jwt");
 var signingKey = builder.Configuration["Jwt:SigningKey"]
