@@ -45,7 +45,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 ```bash
 docker compose up                    # postgres + api on :8080 (Development env, Swagger enabled)
 dotnet build                         # local build
-dotnet test                          # full xUnit suite (191 tests must stay green)
+dotnet test                          # full xUnit suite (197 tests must stay green)
 dotnet ef migrations add <Name> --project src/InvoiceApi
 dotnet ef database update --project src/InvoiceApi
 ```
