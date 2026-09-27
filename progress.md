@@ -279,3 +279,37 @@ in `SQLitePCLRaw.lib.e_sqlite3` 2.1.6, transitiv über `Microsoft.EntityFramewor
 8.0.11 (nur Testprojekt). Die Advisory umfasst alle Versionen ≤ 2.1.11 (SQLite < 3.50.2);
 Fix: direkte Referenz `SQLitePCLRaw.bundle_e_sqlite3` 3.0.3 im Testprojekt. Scan danach
 ohne Funde, alle 132 Tests grün (inkl. SQLite-in-memory-AuthServiceTests).
+
+## 2026-09-28 — Deploy-Readiness: Zeitzone, Healthcheck, Eingabelimits, Rate-Limit
+
+Anlass: Security-/Robustheits-Audit beider Repos vor dem ersten Coolify-Deploy.
+
+### Umgesetzt
+- **Rechnungsdaten in Europe/Berlin** (`BusinessDate`): Ausstellungs-, Zahlungs-,
+  Fälligkeitsdatum, Overdue und Stats-Defaults sind Kalendertage in deutscher
+  Zeit statt `DateTime.Today`/UTC des Containers. Vorher bekam eine Rechnung
+  zwischen 0 und 1/2 Uhr das Vortagsdatum, am 1. Januar Datum und Nummernkreis
+  des Vorjahres. `InvoiceService`/`StatsService` nehmen einen optionalen
+  `TimeProvider` (Tests pinnen die Uhr).
+- **Image:** `tzdata` + `curl` + `HEALTHCHECK` auf `/health` — das aspnet:10.0-Image
+  hat weder curl noch wget, Coolifys Health-Check schlug fehl.
+- **Größenlimits** auf allen Request-DTOs (Tabelle in
+  `invoiceflow/docs/api-contract.md`), 1-200 Positionen, Mengen-/Preisgrenzen,
+  Kestrel-Body-Limit 2 MB; die Middleware mappt Kestrels
+  `BadHttpRequestException` auf 413 mit `{ error }`.
+- **Rate-Limit:** Refresh/Logout auf eigener Policy `auth-session` (60/min pro
+  Client-IP) statt im 5/min-Login-Topf; `X-Forwarded-For` nur noch von privaten
+  Netzen vertraut (Docker, Loopback). Konfiguration in `Services/RateLimiting.cs`,
+  Tests per TestHost. Das Frontend reicht die Client-IP jetzt weiter.
+
+Tests: 200 → 243, Build `-warnaserror`, CI grün.
+
+### Offen / TODO
+- Backups (GoBD) — Coolify-Backups auf S3 außerhalb des Servers + Restore-Test
+- SMTP-Anbieter wählen (ohne Mail kein Login, Verifizierung Pflicht)
+- Storno-Race: Unique-Partial-Index auf `CancellationOfId` + 409 (neue Migration)
+- Demo-Account absichern (`IsDemo`-Guard oder separate Instanz), `.env.example`
+  setzt noch `Seed__Enabled=true`
+- DB-Startup-Retry um `MigrateAsync` (nicht `EnableRetryOnFailure` — explizite
+  Transaktion in `AuthService.DeleteAccountAsync`)
+- Port 8080 in Coolify nicht veröffentlichen (siehe `docs/deploy.md`)
