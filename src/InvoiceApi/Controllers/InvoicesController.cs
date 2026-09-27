@@ -14,7 +14,7 @@ namespace InvoiceApi.Controllers;
 [Route("api/invoices")]
 [Produces("application/json")]
 [Authorize]
-[EnableRateLimiting("api-user")]
+[EnableRateLimiting(RateLimiting.ApiUser)]
 public class InvoicesController(
     IInvoiceService invoices,
     IPdfService pdf,
