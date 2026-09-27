@@ -1,5 +1,6 @@
 using System.Globalization;
 using InvoiceApi.Models;
+using QuestPDF.Drawing.Exceptions;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -29,6 +30,21 @@ public class PdfService : IPdfService
 
     public byte[] Generate(Invoice invoice, User user)
     {
+        try
+        {
+            return Render(invoice, user, keepTogether: true);
+        }
+        catch (DocumentLayoutException)
+        {
+            // A block taller than a whole page (one huge position, very long notes)
+            // can't be kept together — fall back to normal paging rather than failing
+            // the PDF (finalization archives it).
+            return Render(invoice, user, keepTogether: false);
+        }
+    }
+
+    private static byte[] Render(Invoice invoice, User user, bool keepTogether)
+    {
         var isDraft = invoice.Status == InvoiceStatus.Draft;
         // Drafts preview what finalization will produce; finalized invoices render
         // their immutable snapshot.
@@ -53,7 +69,7 @@ public class PdfService : IPdfService
                         .Text("ENTWURF").FontSize(96).Bold().FontColor("#e5e7eb");
 
                 page.Header().Element(c => ComposeHeader(c, invoice));
-                page.Content().Element(c => ComposeContent(c, invoice, user, smallBusiness, taxRate));
+                page.Content().Element(c => ComposeContent(c, invoice, user, smallBusiness, taxRate, keepTogether));
                 page.Footer().Element(c => ComposeFooter(c, user));
             });
         }).GeneratePdf();
@@ -86,7 +102,7 @@ public class PdfService : IPdfService
         });
     }
 
-    private static void ComposeContent(IContainer container, Invoice invoice, User user, bool smallBusiness, decimal taxRate)
+    private static void ComposeContent(IContainer container, Invoice invoice, User user, bool smallBusiness, decimal taxRate, bool keepTogether)
     {
         container.PaddingTop(10).Column(col =>
         {
@@ -178,60 +194,78 @@ public class PdfService : IPdfService
                     var unit = flat ? "flat" : item.Unit;
                     var unitPrice = flat ? Math.Abs(item.Total) : item.UnitPrice;
 
-                    table.Cell().Background(bg).Padding(6).Text($"{index + 1}").FontColor(MutedColor);
-                    table.Cell().Background(bg).Padding(6).Text(item.Description);
-                    table.Cell().Background(bg).Padding(6).AlignRight()
-                        .Text(quantity.ToString("0.##", De));
-                    table.Cell().Background(bg).Padding(6).Text(UnitLabel(unit)).FontColor(MutedColor);
-                    table.Cell().Background(bg).Padding(6).AlignRight()
-                        .Text(Amount(unitPrice, invoice.Currency));
-                    table.Cell().Background(bg).Padding(6).AlignRight()
-                        .Text(Amount(item.Total, invoice.Currency));
+                    // ShowEntire on every cell: a position that doesn't fit the rest of
+                    // the page moves to the next one as a whole instead of splitting.
+                    IContainer Cell()
+                    {
+                        IContainer cell = table.Cell();
+                        if (keepTogether)
+                            cell = cell.ShowEntire();
+                        return cell.Background(bg).Padding(6);
+                    }
+
+                    Cell().Text($"{index + 1}").FontColor(MutedColor);
+                    Cell().Text(item.Description);
+                    Cell().AlignRight().Text(quantity.ToString("0.##", De));
+                    Cell().Text(UnitLabel(unit)).FontColor(MutedColor);
+                    Cell().AlignRight().Text(Amount(unitPrice, invoice.Currency));
+                    Cell().AlignRight().Text(Amount(item.Total, invoice.Currency));
                 }
             });
 
-            // totals — § 19: no VAT line at all, total = net
-            var net = invoice.Subtotal;
-            var vat = Math.Round(net * taxRate, 2);
+            // closing block — total, legal notices, payment terms and notes move to
+            // the next page as a whole instead of leaving a lone line behind
+            IContainer closing = col.Item();
+            if (keepTogether)
+                closing = closing.ShowEntire();
 
-            col.Item().AlignRight().Column(totals =>
+            closing.Column(end =>
             {
-                totals.Spacing(4);
+                end.Spacing(16);
 
-                if (!smallBusiness)
+                // totals — § 19: no VAT line at all, total = net
+                var net = invoice.Subtotal;
+                var vat = Math.Round(net * taxRate, 2);
+
+                end.Item().AlignRight().Column(totals =>
                 {
-                    TotalRow(totals, "Nettobetrag", Amount(net, invoice.Currency));
-                    TotalRow(totals, $"zzgl. {taxRate.ToString("P0", De)} USt.", Amount(vat, invoice.Currency));
+                    totals.Spacing(4);
+
+                    if (!smallBusiness)
+                    {
+                        TotalRow(totals, "Nettobetrag", Amount(net, invoice.Currency));
+                        TotalRow(totals, $"zzgl. {taxRate.ToString("P0", De)} USt.", Amount(vat, invoice.Currency));
+                    }
+
+                    totals.Item().LineHorizontal(1).LineColor(PrimaryColor);
+
+                    totals.Item().Row(r =>
+                    {
+                        r.ConstantItem(120).Text("Gesamtbetrag").Bold().FontSize(12);
+                        r.ConstantItem(120).AlignRight()
+                            .Text(Amount(net + vat, invoice.Currency))
+                            .Bold().FontSize(12).FontColor(PrimaryColor);
+                    });
+                });
+
+                if (smallBusiness)
+                    end.Item().Text("Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.").FontSize(9);
+
+                if (invoice.Type == InvoiceType.Cancellation)
+                    end.Item().Text("Der Betrag wird entsprechend verrechnet bzw. erstattet.")
+                        .FontSize(9).FontColor(MutedColor);
+                else
+                    end.Item().Text($"Zahlbar ohne Abzug bis {Date(invoice.DueDate)}.").FontSize(9);
+
+                if (!string.IsNullOrWhiteSpace(invoice.Notes))
+                {
+                    end.Item().Column(n =>
+                    {
+                        n.Item().Text("Anmerkungen").Bold().FontSize(9).FontColor(MutedColor);
+                        n.Item().Text(invoice.Notes).FontSize(9);
+                    });
                 }
-
-                totals.Item().LineHorizontal(1).LineColor(PrimaryColor);
-
-                totals.Item().Row(r =>
-                {
-                    r.ConstantItem(120).Text("Gesamtbetrag").Bold().FontSize(12);
-                    r.ConstantItem(120).AlignRight()
-                        .Text(Amount(net + vat, invoice.Currency))
-                        .Bold().FontSize(12).FontColor(PrimaryColor);
-                });
             });
-
-            if (smallBusiness)
-                col.Item().Text("Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.").FontSize(9);
-
-            if (invoice.Type == InvoiceType.Cancellation)
-                col.Item().Text("Der Betrag wird entsprechend verrechnet bzw. erstattet.")
-                    .FontSize(9).FontColor(MutedColor);
-            else
-                col.Item().Text($"Zahlbar ohne Abzug bis {Date(invoice.DueDate)}.").FontSize(9);
-
-            if (!string.IsNullOrWhiteSpace(invoice.Notes))
-            {
-                col.Item().Column(n =>
-                {
-                    n.Item().Text("Anmerkungen").Bold().FontSize(9).FontColor(MutedColor);
-                    n.Item().Text(invoice.Notes).FontSize(9);
-                });
-            }
         });
     }
 

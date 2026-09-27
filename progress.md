@@ -1,5 +1,24 @@
 # Progress
 
+## PDF-Seitenumbruch: Positionen nie zerreißen (2026-09-27)
+
+### Umgesetzt
+
+- **`PdfService`**: Jede Positionszelle bekommt `ShowEntire()` — passt eine
+  Position nicht mehr auf die Seite, rutscht sie komplett auf die nächste,
+  statt mitten in der Beschreibung umzubrechen. Der Abschlussblock (Summen,
+  § 19-Hinweis, Zahlungsziel, Anmerkungen) ist ebenfalls ein zusammengehaltener
+  Block, damit nicht z. B. „Zahlbar ohne Abzug …“ allein auf der letzten Seite
+  steht.
+- **Fallback:** Ist ein Block höher als eine ganze Seite, wirft QuestPDF
+  `DocumentLayoutException` — dann wird ohne Zusammenhalten neu gerendert,
+  statt das PDF (und damit das Festschreiben, das es archiviert) scheitern zu
+  lassen. QuestPDF 2024.12.3 hat noch kein `PreventPageBreak`.
+- **Tests: 200 grün** (197 → +3), erstmals echte PDF-Renderings: neue
+  Test-Dependency **PdfPig**, liest die Seiten zurück und prüft per Start-/
+  Endmarken, dass keine Position und nicht der Abschlussblock über eine
+  Seitengrenze läuft, und dass eine überlange Position trotzdem rendert.
+
 ## Prompt 18 — Refresh-Token-Cleanup-Job (2026-07-18)
 
 ### Umgesetzt
