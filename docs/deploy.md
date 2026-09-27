@@ -50,8 +50,15 @@ One line per variable: what it does, and whether you must set it.
 | `RefreshTokenCleanup__Interval` / `RefreshTokenCleanup__Retention` | Background cleanup of expired/revoked refresh tokens, defaults `06:00:00` (run every 6 h) / `7.00:00:00` (keep 7 days past expiry/revocation). Leave as-is. |
 | `ASPNETCORE_URLS` | Listen address inside the container, `http://0.0.0.0:8080`. The Dockerfile already exposes 8080; TLS terminates at Coolify's proxy. |
 
-Health check endpoint for Coolify: `GET /health` (returns 503 while the
-database is unreachable).
+Health check endpoint for Coolify: `GET /health` on port 8080 (returns 503
+while the database is unreachable). The image ships `curl` and a Dockerfile
+`HEALTHCHECK` against that endpoint (60 s start period for the startup
+migrations); if you configure the check in the Coolify UI instead, use the
+same path and port — the base image has no wget.
+
+No `TZ` variable is needed: invoice dates (issue/due/paid, overdue, stats) are
+computed as Europe/Berlin calendar days in code (`BusinessDate`), independent
+of the container clock, which stays UTC.
 
 ## invoiceflow (frontend)
 

@@ -41,6 +41,8 @@ builder.Services.AddScoped<IStatsService, StatsService>();
 builder.Services.AddScoped<IPdfService, PdfService>();
 builder.Services.AddScoped<IEInvoiceService, EInvoiceService>();
 builder.Services.AddScoped<SeedService>();
+// Injected so tests can pin the clock; business dates go through BusinessDate (Europe/Berlin)
+builder.Services.AddSingleton(TimeProvider.System);
 
 // E-mail: real SMTP only when explicitly selected (Email:Provider=Smtp), otherwise
 // the log-only sender — the default in Development and anywhere SMTP isn't configured.

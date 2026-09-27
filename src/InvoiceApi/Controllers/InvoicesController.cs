@@ -37,8 +37,8 @@ public class InvoicesController(
         [FromQuery] DateTime? to,
         CancellationToken ct)
     {
-        var toDate = DateOnly.FromDateTime((to ?? DateTime.UtcNow).ToUniversalTime());
-        var fromDate = DateOnly.FromDateTime((from ?? DateTime.UtcNow.AddYears(-1)).ToUniversalTime());
+        var toDate = to.HasValue ? DateOnly.FromDateTime(to.Value.ToUniversalTime()) : BusinessDate.Today();
+        var fromDate = from.HasValue ? DateOnly.FromDateTime(from.Value.ToUniversalTime()) : BusinessDate.Today().AddYears(-1);
 
         if (fromDate > toDate)
             return BadRequest(new { error = "'from' must be before or equal to 'to'." });

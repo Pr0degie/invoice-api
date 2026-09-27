@@ -16,8 +16,11 @@ WORKDIR /app
 # text-less PDFs. fontconfig aliases the requested "Arial" to Liberation Sans.
 # Base is Ubuntu 24.04 since .NET 10 (Debian variants discontinued); both
 # packages exist under the same names in the Ubuntu repos.
+# tzdata: invoice dates are Europe/Berlin calendar days (BusinessDate) — the zone
+# lookup reads /usr/share/zoneinfo. curl: the image ships neither curl nor wget,
+# and Coolify runs its health check inside the container.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends fontconfig fonts-liberation \
+ && apt-get install -y --no-install-recommends fontconfig fonts-liberation tzdata curl \
  && rm -rf /var/lib/apt/lists/*
 
 # non-root user — the .NET images ship a built-in unprivileged "app" user
@@ -28,5 +31,10 @@ COPY --from=build /app/publish .
 
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
+
+# /health probes the database and returns 503 while it is unreachable.
+# start-period covers the migrations that run at startup.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -fsS http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["dotnet", "InvoiceApi.dll"]

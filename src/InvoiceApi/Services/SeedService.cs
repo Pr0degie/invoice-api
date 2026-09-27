@@ -43,7 +43,7 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, IPdfService pd
         };
         db.Users.Add(user);
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = BusinessDate.Today();
         var invoices = BuildInvoices(user.Id, today);
 
         AssignNumbers(invoices, user.Id);

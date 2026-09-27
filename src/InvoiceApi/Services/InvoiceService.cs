@@ -18,15 +18,17 @@ public interface IInvoiceService
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
-public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IPdfService pdf, IEInvoiceService einvoice) : IInvoiceService
+public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IPdfService pdf, IEInvoiceService einvoice, TimeProvider? clock = null) : IInvoiceService
 {
     // Concurrent finalizations race on the sequence counter (concurrency token) or,
     // as a backstop, the unique (UserId, Number) index — losers retry with a fresh number.
     private const int MaxNumberingAttempts = 5;
 
+    private DateOnly Today() => BusinessDate.Today(clock);
+
     public async Task<InvoiceResponse> CreateAsync(CreateInvoiceRequest req, CancellationToken ct = default)
     {
-        var today = DateOnly.FromDateTime(DateTime.Today);
+        var today = Today();
         var userId = currentUser.CurrentUserId;
 
         ValidateServiceDates(req);
@@ -104,7 +106,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
 
         if (overdueOnly)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = Today();
             query = query.Where(i => i.Status == InvoiceStatus.Finalized
                 && i.Type == InvoiceType.Invoice
                 && i.DueDate < today);
@@ -218,7 +220,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
         invoice.UpdatedAt = DateTimeOffset.UtcNow;
 
         if (newStatus == InvoiceStatus.Paid)
-            invoice.PaidAt ??= DateOnly.FromDateTime(DateTime.UtcNow);
+            invoice.PaidAt ??= Today();
         // Paid→Finalized keeps PaidAt so a Paid→Finalized→Paid round trip preserves the original date
 
         await db.SaveChangesAsync(ct);
@@ -228,7 +230,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
     public async Task<InvoiceResponse> FinalizeAsync(Guid id, DateOnly? issueDate = null, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
-        var today = DateOnly.FromDateTime(DateTime.Today);
+        var today = Today();
 
         if (issueDate > today)
             throw new ValidationException("The issue date must not be in the future.");
@@ -331,7 +333,7 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
     public async Task<InvoiceResponse> CancelAsync(Guid id, CancellationToken ct = default)
     {
         var userId = currentUser.CurrentUserId;
-        var today = DateOnly.FromDateTime(DateTime.Today);
+        var today = Today();
 
         var invoice = await db.Invoices
             .Include(i => i.LineItems.OrderBy(li => li.Position))
@@ -563,7 +565,7 @@ internal static class InvoiceMappings
 {
     public static InvoiceResponse ToResponse(this Invoice i, string? cancelledByNumber = null)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = BusinessDate.Today();
         return new(
             i.Id,
             i.Number,

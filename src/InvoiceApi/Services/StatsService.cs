@@ -10,7 +10,7 @@ public interface IStatsService
     Task<StatsDto> GetStatsAsync(Guid userId, DateOnly from, DateOnly to, CancellationToken ct = default);
 }
 
-public class StatsService(AppDbContext db) : IStatsService
+public class StatsService(AppDbContext db, TimeProvider? clock = null) : IStatsService
 {
     public async Task<StatsDto> GetStatsAsync(Guid userId, DateOnly from, DateOnly to, CancellationToken ct = default)
     {
@@ -21,7 +21,7 @@ public class StatsService(AppDbContext db) : IStatsService
         // Q1 — Outstanding: Finalized (unpaid) invoices by IssueDate. Overdue is
         // derived (past due date), a subset of outstanding. Cancellation invoices
         // (negative Stornorechnungen) are corrective documents and excluded.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = BusinessDate.Today(clock);
         var outstandingItems = await db.Invoices
             .Where(i => i.UserId == userId
                 && i.Status == InvoiceStatus.Finalized

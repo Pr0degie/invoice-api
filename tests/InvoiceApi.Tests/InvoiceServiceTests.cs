@@ -249,7 +249,7 @@ public class InvoiceServiceTests : IDisposable
     public async Task FinalizeAsync_ShouldResetCounterPerYear()
     {
         await SeedCompleteUser();
-        var year = LocalToday.Year;
+        var year = Today.Year;
 
         var lastYear = await _sut.CreateAsync(BuildRequest() with
         {
@@ -457,13 +457,41 @@ public class InvoiceServiceTests : IDisposable
         // Stale draft: created two weeks ago, never finalized
         var draft = await _sut.CreateAsync(BuildRequest() with
         {
-            IssueDate = LocalToday.AddDays(-14),
-            DueDate = LocalToday,
+            IssueDate = Today.AddDays(-14),
+            DueDate = Today,
         });
 
         var finalized = await _sut.FinalizeAsync(draft.Id);
 
-        finalized.IssueDate.Should().Be(LocalToday);
+        finalized.IssueDate.Should().Be(Today);
+    }
+
+    [Fact]
+    public async Task FinalizeAsync_ShortlyAfterMidnightGermanTime_UsesTheGermanDateAndYear()
+    {
+        // 2026-12-31 23:30 UTC is 2027-01-01 00:30 in Germany — the container clock is UTC
+        await SeedCompleteUser();
+        var sut = ServiceFor(_userId, new FixedTimeProvider(new DateTimeOffset(2026, 12, 31, 23, 30, 0, TimeSpan.Zero)));
+        var draft = await sut.CreateAsync(BuildRequest() with { ServiceDate = new DateOnly(2026, 12, 20) });
+
+        var finalized = await sut.FinalizeAsync(draft.Id);
+
+        finalized.IssueDate.Should().Be(new DateOnly(2027, 1, 1));
+        finalized.Number.Should().Be("2027-001");
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_Paid_StampsTheGermanDate()
+    {
+        // 2026-07-15 22:30 UTC is 2026-07-16 00:30 in Germany (summer time)
+        await SeedCompleteUser();
+        var sut = ServiceFor(_userId, new FixedTimeProvider(new DateTimeOffset(2026, 7, 15, 22, 30, 0, TimeSpan.Zero)));
+        var draft = await sut.CreateAsync(BuildRequest() with { ServiceDate = new DateOnly(2026, 7, 1) });
+        await sut.FinalizeAsync(draft.Id);
+
+        var paid = await sut.UpdateStatusAsync(draft.Id, InvoiceStatus.Paid);
+
+        paid.PaidAt.Should().Be(new DateOnly(2026, 7, 16));
     }
 
     [Fact]
@@ -471,7 +499,7 @@ public class InvoiceServiceTests : IDisposable
     {
         await SeedCompleteUser();
         var draft = await _sut.CreateAsync(BuildRequest());
-        var explicitDate = LocalToday.AddDays(-3);
+        var explicitDate = Today.AddDays(-3);
 
         var finalized = await _sut.FinalizeAsync(draft.Id, issueDate: explicitDate);
 
@@ -484,7 +512,7 @@ public class InvoiceServiceTests : IDisposable
         await SeedCompleteUser();
         var draft = await _sut.CreateAsync(BuildRequest());
 
-        var act = () => _sut.FinalizeAsync(draft.Id, issueDate: LocalToday.AddDays(1));
+        var act = () => _sut.FinalizeAsync(draft.Id, issueDate: Today.AddDays(1));
 
         (await act.Should().ThrowAsync<ValidationException>())
             .Which.Message.Should().Contain("future");
@@ -497,14 +525,14 @@ public class InvoiceServiceTests : IDisposable
         // 14-day payment terms on a two-week-old draft: due today if left as-is
         var draft = await _sut.CreateAsync(BuildRequest() with
         {
-            IssueDate = LocalToday.AddDays(-14),
-            DueDate = LocalToday,
+            IssueDate = Today.AddDays(-14),
+            DueDate = Today,
         });
 
         var finalized = await _sut.FinalizeAsync(draft.Id);
 
-        finalized.IssueDate.Should().Be(LocalToday);
-        finalized.DueDate.Should().Be(LocalToday.AddDays(14));
+        finalized.IssueDate.Should().Be(Today);
+        finalized.DueDate.Should().Be(Today.AddDays(14));
     }
 
     [Fact]
@@ -514,14 +542,14 @@ public class InvoiceServiceTests : IDisposable
         // DueDate edited to an absolute date before the draft's IssueDate → span clamps to 0
         var draft = await _sut.CreateAsync(BuildRequest() with
         {
-            IssueDate = LocalToday.AddDays(-2),
-            DueDate = LocalToday.AddDays(-5),
+            IssueDate = Today.AddDays(-2),
+            DueDate = Today.AddDays(-5),
         });
 
         var finalized = await _sut.FinalizeAsync(draft.Id);
 
-        finalized.IssueDate.Should().Be(LocalToday);
-        finalized.DueDate.Should().Be(LocalToday);
+        finalized.IssueDate.Should().Be(Today);
+        finalized.DueDate.Should().Be(Today);
     }
 
     [Fact]
@@ -529,17 +557,17 @@ public class InvoiceServiceTests : IDisposable
     {
         await SeedCompleteUser();
         // Draft from December, finalized in January → number belongs to the new year
-        var december = new DateOnly(LocalToday.Year - 1, 12, 15);
+        var december = new DateOnly(Today.Year - 1, 12, 15);
         var draft = await _sut.CreateAsync(BuildRequest() with
         {
             IssueDate = december,
             DueDate = december.AddDays(14),
         });
 
-        var january = new DateOnly(LocalToday.Year, 1, 1);
+        var january = new DateOnly(Today.Year, 1, 1);
         var finalized = await _sut.FinalizeAsync(draft.Id, issueDate: january);
 
-        finalized.Number.Should().Be($"{LocalToday.Year}-001");
+        finalized.Number.Should().Be($"{Today.Year}-001");
         finalized.IssueDate.Should().Be(january);
         finalized.DueDate.Should().Be(january.AddDays(14));
     }
@@ -1153,13 +1181,11 @@ public class InvoiceServiceTests : IDisposable
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+    // The service stamps business dates with the German calendar day (BusinessDate)
+    private static DateOnly Today => BusinessDate.Today();
 
-    // FinalizeAsync stamps dates with the local calendar day (DateTime.Today)
-    private static DateOnly LocalToday => DateOnly.FromDateTime(DateTime.Today);
-
-    private InvoiceService ServiceFor(Guid userId)
-        => new(_db, new FakeCurrentUserService(userId), new FakePdfService(), new FakeEInvoiceService());
+    private InvoiceService ServiceFor(Guid userId, TimeProvider? clock = null)
+        => new(_db, new FakeCurrentUserService(userId), new FakePdfService(), new FakeEInvoiceService(), clock);
 
     private async Task<int> SequenceCounter()
         => (await _db.InvoiceNumberSequences.FindAsync(_userId, Today.Year))?.Counter ?? 0;
@@ -1219,6 +1245,11 @@ public class InvoiceServiceTests : IDisposable
     };
 
     public void Dispose() => _db.Dispose();
+}
+
+internal class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+{
+    public override DateTimeOffset GetUtcNow() => utcNow;
 }
 
 internal class FakeCurrentUserService(Guid userId) : ICurrentUserService
