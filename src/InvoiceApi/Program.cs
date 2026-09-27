@@ -1,11 +1,9 @@
 using System.Text;
-using System.Threading.RateLimiting;
 using InvoiceApi.Data;
 using InvoiceApi.Middleware;
 using InvoiceApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.Tokens;
@@ -92,42 +90,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// Behind the reverse proxy (Coolify/Traefik) the socket peer is the proxy, not the client.
-// Trust X-Forwarded-For/-Proto so RemoteIpAddress (used by rate-limit partitions) is the real client IP.
-builder.Services.Configure<ForwardedHeadersOptions>(opts =>
-{
-    opts.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    // The proxy IPs aren't statically known — clear the loopback-only defaults.
-    // (KnownIPNetworks replaced the obsolete KnownNetworks in ASP.NET Core 10.)
-    opts.KnownIPNetworks.Clear();
-    opts.KnownProxies.Clear();
-});
-
-// Rate limiting — per-IP for auth, per-user for API
-builder.Services.AddRateLimiter(opts =>
-{
-    opts.AddPolicy("auth-ip", ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 5,
-                Window = TimeSpan.FromMinutes(1)
-            }));
-
-    opts.AddPolicy("api-user", ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: ctx.User.FindFirst("sub")?.Value
-                          ?? ctx.Connection.RemoteIpAddress?.ToString()
-                          ?? "anon",
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 100,
-                Window = TimeSpan.FromMinutes(1)
-            }));
-
-    opts.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-});
+// Client IP from X-Forwarded-For + the rate-limit policies (see RateLimiting)
+builder.Services.Configure<ForwardedHeadersOptions>(RateLimiting.ConfigureForwardedHeaders);
+builder.Services.AddRateLimiter(RateLimiting.ConfigurePolicies);
 
 // CORS — named policy, exact origins + optional preview-deploy suffix.
 // No AllowCredentials: the API is Bearer-only; credentials mode is for cookies.

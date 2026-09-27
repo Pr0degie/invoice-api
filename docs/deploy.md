@@ -60,6 +60,15 @@ No `TZ` variable is needed: invoice dates (issue/due/paid, overdue, stats) are
 computed as Europe/Berlin calendar days in code (`BusinessDate`), independent
 of the container clock, which stays UTC.
 
+**Client IP / rate limits.** Auth calls reach the API from the Next.js
+container, which forwards the browser's IP as `X-Forwarded-For`. The API
+trusts that header only from private-network peers (Docker networks,
+loopback) — so keep the API on the internal Coolify network and **don't
+publish port 8080 on the host**. Behind Traefik, a public API domain is fine
+(Traefik is a private peer and sets the header itself). Limits: login /
+register / password & mail endpoints 5 per minute per client IP; refresh /
+logout 60 per minute per client IP; invoice API 100 per minute per user.
+
 ## invoiceflow (frontend)
 
 | Variable | What it does |
