@@ -6,16 +6,18 @@ namespace InvoiceApi.Models.Dtos;
 // localize the verification mail and to prefix the link's path segment. Never
 // trusted as a free string — normalized against the allowlist before use.
 public record RegisterDto(
-    [Required, EmailAddress] string Email,
+    [Required, EmailAddress, MaxLength(256)] string Email,
     // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
     [Required, MinLength(8), MaxLength(128)] string Password,
-    [Required, MinLength(2)] string Name,
-    string? Locale = null
+    [Required, MinLength(2), MaxLength(200)] string Name,
+    [MaxLength(10)] string? Locale = null
 );
 
+// Password cap matches registration/reset (no stored password is longer), so
+// an oversized body is rejected before the BCrypt work.
 public record LoginDto(
-    [Required, EmailAddress] string Email,
-    [Required] string Password
+    [Required, EmailAddress, MaxLength(256)] string Email,
+    [Required, MaxLength(128)] string Password
 );
 
 public record AuthResponseDto(
@@ -61,10 +63,11 @@ public record UpdateProfileDto(
     [MaxLength(11)] string? Bic = null,
     [MaxLength(100)] string? BankName = null);
 
-public record RefreshRequestDto([Required] string RefreshToken);
+// Tokens are fixed-size random values (Base64/hex, < 100 chars); 256 is headroom.
+public record RefreshRequestDto([Required, MaxLength(256)] string RefreshToken);
 
 public record ChangePasswordDto(
-    [Required] string CurrentPassword,
+    [Required, MaxLength(128)] string CurrentPassword,
     // MaxLength(128): BCrypt only evaluates the first 72 bytes anyway.
     [Required, MinLength(8), MaxLength(128)] string NewPassword);
 
@@ -72,12 +75,12 @@ public record ChangePasswordDto(
 // return this so the response never reveals whether an account exists.
 public record MessageResponseDto(string Message);
 
-public record ForgotPasswordDto([Required, EmailAddress] string Email, string? Locale = null);
+public record ForgotPasswordDto([Required, EmailAddress, MaxLength(256)] string Email, [MaxLength(10)] string? Locale = null);
 
 public record ResetPasswordDto(
-    [Required] string Token,
+    [Required, MaxLength(256)] string Token,
     [Required, MinLength(8), MaxLength(128)] string NewPassword);
 
-public record VerifyEmailDto([Required] string Token);
+public record VerifyEmailDto([Required, MaxLength(256)] string Token);
 
-public record ResendVerificationDto([Required, EmailAddress] string Email, string? Locale = null);
+public record ResendVerificationDto([Required, EmailAddress, MaxLength(256)] string Email, [MaxLength(10)] string? Locale = null);

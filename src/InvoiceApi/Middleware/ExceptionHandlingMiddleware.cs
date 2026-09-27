@@ -31,6 +31,8 @@ public class ExceptionHandlingMiddleware(RequestDelegate next)
         ForbiddenException => StatusCodes.Status403Forbidden,
         NotFoundException => StatusCodes.Status404NotFound,
         ConflictException => StatusCodes.Status409Conflict,
+        // Kestrel's request-level rejections, e.g. 413 once a body exceeds MaxRequestBodySize
+        BadHttpRequestException bad => bad.StatusCode,
         _ => null
     };
 }

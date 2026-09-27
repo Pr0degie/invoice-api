@@ -19,6 +19,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
 
+// Kestrel's default body limit is 30 MB. The largest legitimate body — an invoice
+// at the DTO limits (200 line items à 2000 chars) — stays under 1 MB even with
+// multi-byte characters; 2 MB leaves headroom and rejects oversized bodies with 413.
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
+
 // DATABASE_URL adapter — managed Postgres providers inject postgres://user:pass@host:port/db
 // TLS cert validation is ON by default; Database__TrustServerCertificate=true is an
 // explicit opt-out for setups with self-signed certs (e.g. provider-internal networking).

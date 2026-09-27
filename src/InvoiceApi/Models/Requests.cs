@@ -2,25 +2,29 @@ using System.ComponentModel.DataAnnotations;
 
 namespace InvoiceApi.Models;
 
+// Size limits bound every string and the line-item count: the text columns are
+// unbounded in Postgres, and a draft's PDF is rendered on each download — so these
+// attributes are what keeps one account from exhausting the shared host. Limits
+// with a matching HasMaxLength column mirror it (a longer value would 500 on save).
 public record CreateInvoiceRequest
 {
-    [Required, MinLength(1)] public string SenderName { get; init; } = default!;
-    [Required, MinLength(1)] public string SenderAddress { get; init; } = default!;
-    [Required, MinLength(1)] public string RecipientName { get; init; } = default!;
+    [Required, MinLength(1), MaxLength(200)] public string SenderName { get; init; } = default!;
+    [Required, MinLength(1), MaxLength(500)] public string SenderAddress { get; init; } = default!;
+    [Required, MinLength(1), MaxLength(200)] public string RecipientName { get; init; } = default!;
 
     // Legacy free-text recipient address. Optional now that structured fields exist:
     // the server composes this column from them when they're provided, so new clients
     // can leave it empty. Structured fields are enforced at finalization, not here.
-    public string? RecipientAddress { get; init; }
+    [MaxLength(500)] public string? RecipientAddress { get; init; }
 
     // Structured recipient (buyer) data for the E-Rechnung (XRechnung).
-    public string? RecipientStreet { get; init; }
-    public string? RecipientPostalCode { get; init; }
-    public string? RecipientCity { get; init; }
-    public string? RecipientCountryCode { get; init; } = "DE"; // ISO 3166-1 alpha-2
-    [EmailAddress] public string? RecipientEmail { get; init; }  // BT-49
-    public string? RecipientVatId { get; init; }                 // BT-48 (optional)
-    public string? BuyerReference { get; init; }                 // BT-10 (defaults to "-" at finalize)
+    [MaxLength(200)] public string? RecipientStreet { get; init; }
+    [MaxLength(20)] public string? RecipientPostalCode { get; init; }
+    [MaxLength(100)] public string? RecipientCity { get; init; }
+    [MaxLength(2)] public string? RecipientCountryCode { get; init; } = "DE"; // ISO 3166-1 alpha-2
+    [EmailAddress, MaxLength(256)] public string? RecipientEmail { get; init; }  // BT-49
+    [MaxLength(20)] public string? RecipientVatId { get; init; }                 // BT-48 (optional)
+    [MaxLength(50)] public string? BuyerReference { get; init; }                 // BT-10 (defaults to "-" at finalize)
 
     public DateOnly? IssueDate { get; init; }
     public DateOnly? DueDate { get; init; }
@@ -31,18 +35,22 @@ public record CreateInvoiceRequest
     public DateOnly? ServicePeriodStart { get; init; }
     public DateOnly? ServicePeriodEnd { get; init; }
 
-    [Required, MinLength(1)] public List<CreateLineItemRequest> LineItems { get; init; } = default!;
+    [Required, MinLength(1), MaxLength(200)] public List<CreateLineItemRequest> LineItems { get; init; } = default!;
     [Range(0, 1)] public decimal TaxRate { get; init; } = 0.19m;
-    public string Currency { get; init; } = "EUR";
-    public string? Notes { get; init; }
+    [MaxLength(3)] public string Currency { get; init; } = "EUR";
+    [MaxLength(4000)] public string? Notes { get; init; }
 }
 
 public record CreateLineItemRequest
 {
-    [Required] public string Description { get; init; } = default!;
-    [Range(0.001, double.MaxValue)] public decimal Quantity { get; init; }
-    [Range(0, double.MaxValue)] public decimal UnitPrice { get; init; }
-    public string Unit { get; init; } = "h";
+    [Required, MaxLength(2000)] public string Description { get; init; } = default!;
+    // Bounds keep Quantity * UnitPrice and the invoice total inside numeric(18,2);
+    // limits are parsed invariantly ("0.001" would be 1 under de-DE).
+    [Range(typeof(decimal), "0.001", "1000000", ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
+    public decimal Quantity { get; init; }
+    [Range(typeof(decimal), "0", "10000000", ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
+    public decimal UnitPrice { get; init; }
+    [MaxLength(20)] public string Unit { get; init; } = "h";
 
     // Display-only: FlatRate renders the position as 1 × pauschal × line total.
     public LineItemDisplayMode DisplayMode { get; init; } = LineItemDisplayMode.AsEntered;
