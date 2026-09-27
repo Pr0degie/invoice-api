@@ -1,8 +1,14 @@
 # Deployment — Coolify on Hetzner
 
-Deploy target: a Hetzner CX32 running [Coolify](https://coolify.io). Three
-services: **invoice-api** (this repo, Dockerfile), **invoiceflow** (frontend
-repo, Dockerfile), **PostgreSQL 16** (Coolify-managed database resource).
+Deploy target: a Hetzner CX33 (4 vCPU, 8 GB RAM, 80 GB NVMe) running
+[Coolify](https://coolify.io). Three services: **invoice-api** (this repo,
+Dockerfile), **invoiceflow** (frontend repo, Dockerfile), **PostgreSQL 16**
+(Coolify-managed database resource).
+
+Don't size down to the 4 GB tier: Coolify builds both Docker images on the same
+box that serves production, and a Next.js build running next to the .NET build
+and Postgres does not fit in 4 GB. (CX32 was the previously documented target;
+Hetzner retired that plan — CX33 is the like-for-like successor.)
 
 This file is the environment-variable checklist for the first staging deploy.
 One line per variable: what it does, and whether you must set it.
