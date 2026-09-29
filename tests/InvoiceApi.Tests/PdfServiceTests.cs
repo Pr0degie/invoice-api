@@ -14,9 +14,11 @@ public class PdfServiceTests
     public void Generate_ShouldNeverSplitALineItemAcrossPages()
     {
         // 14 positions of varying height span several pages, so some position
-        // ends up at a page break. Each carries a start and an end marker.
+        // ends up at a page break. Each carries a start and an end marker. Each
+        // one fits on a page (the filler wraps one word per line) — a taller one
+        // is the fallback case below.
         var descriptions = Enumerable.Range(1, 14)
-            .Select(k => $"START{k:D2} {Filler(20 + k * 7 % 40)} END{k:D2}")
+            .Select(k => $"START{k:D2} {Filler(20 + k * 7 % 30)} END{k:D2}")
             .ToList();
 
         var pages = ReadPages(_sut.Generate(NewInvoice(descriptions), NewUser()));
@@ -57,6 +59,114 @@ public class PdfServiceTests
             PageOf(pages, "Gesamtbetrag").Should().Be(PageOf(pages, "Abzug"), $"with {count} positions");
         }
     }
+
+    [Fact]
+    public void Generate_ShouldNeverLeaveTheTotalAloneOnAPage()
+    {
+        // Across invoice lengths the page break eventually falls between the last
+        // position and the closing block — the last position must then move along
+        // so the total never stands alone on the final page.
+        for (var count = 1; count <= 24; count++)
+        {
+            var descriptions = Enumerable.Range(1, count).Select(k => $"POS{k:D2} {Filler(25)}").ToList();
+
+            var pages = ReadPages(_sut.Generate(NewInvoice(descriptions), NewUser()));
+
+            PageOf(pages, "Gesamtbetrag").Should().Be(PageOf(pages, $"POS{count:D2}"), $"with {count} positions");
+        }
+    }
+
+    [Fact]
+    public void Generate_ShouldPrintTheSenderAddressOnlyInLetterheadAndWindow()
+    {
+        // The letterhead (from the invoice snapshot) carries the address § 14 Abs. 4 /
+        // § 34a UStDV require on every page; page 1 adds the Rücksendeangabe for the
+        // envelope window. Never repeated in the footer.
+        var descriptions = Enumerable.Repeat(Filler(40), 14).ToList();
+
+        var pages = ReadPages(_sut.Generate(NewInvoice(descriptions), NewUser()));
+
+        pages.Should().HaveCountGreaterThan(1);
+        for (var page = 0; page < pages.Count; page++)
+            CountOf(pages[page], "Musterweg").Should().Be(page == 0 ? 2 : 1, $"page {page + 1}");
+    }
+
+    [Fact]
+    public void Generate_ShouldPlaceTheRecipientInTheDin5008FormBAddressZone()
+    {
+        // DL window envelopes show the DIN 5008 Form B address field: 20 mm from the
+        // left, 85 mm wide; its Anschriftzone runs 62.7–90 mm from the top.
+        var words = WordsMm(_sut.Generate(NewInvoice(new[] { "kurz" }), NewUser()), 1);
+
+        foreach (var marker in new[] { "Kunde", "GmbH", "Kundenstraße", "54321", "Kundenstadt" })
+        {
+            var word = words.Single(w => w.Text == marker);
+            word.Left.Should().BeGreaterThanOrEqualTo(20 - Tolerance, marker);
+            word.Right.Should().BeLessThanOrEqualTo(105, marker);
+            word.Top.Should().BeGreaterThanOrEqualTo(62.7 - Tolerance, marker);
+            word.Bottom.Should().BeLessThanOrEqualTo(90, marker);
+        }
+    }
+
+    [Fact]
+    public void Generate_ShouldPrintTheReturnAddressInTheDin5008NoteZone()
+    {
+        // The Rücksendeangabe belongs in the Zusatz- und Vermerkzone (45–62.7 mm),
+        // so the post office sees it through the window as well.
+        var words = WordsMm(_sut.Generate(NewInvoice(new[] { "kurz" }), NewUser()), 1);
+
+        words.Should().Contain(w => w.Text == "Musterweg"
+            && w.Left >= 20 - Tolerance && w.Right <= 105 && w.Top >= 45 - Tolerance && w.Bottom <= 62.7);
+    }
+
+    [Fact]
+    public void Generate_ShouldPrintFoldMarksOnTheFirstPageOnly()
+    {
+        // DIN 5008 Form B: fold marks at 105 and 210 mm at the left edge, outside the
+        // text area. No punch mark (148.5 mm) — a third line read as a third fold.
+        var pdf = _sut.Generate(NewInvoice(Enumerable.Repeat(Filler(40), 14).ToList()), NewUser());
+
+        var marks = MarkPositionsMm(pdf, 1);
+        marks.Should().HaveCount(2);
+        marks[0].Should().BeApproximately(105, 0.5);
+        marks[1].Should().BeApproximately(210, 0.5);
+        MarkPositionsMm(pdf, 2).Should().BeEmpty();
+    }
+
+    private const double PointsPerMm = 72 / 25.4;
+    private const double Tolerance = 0.01; // mm — float rounding between QuestPDF and PdfPig
+
+    // Words of one page with their box in mm, measured from the top-left corner.
+    private static List<(string Text, double Left, double Top, double Right, double Bottom)> WordsMm(byte[] pdf, int pageNumber)
+    {
+        using var doc = PdfDocument.Open(pdf);
+        var page = doc.GetPage(pageNumber);
+        return page.GetWords()
+            .Select(w => (w.Text,
+                w.BoundingBox.Left / PointsPerMm,
+                (page.Height - w.BoundingBox.Top) / PointsPerMm,
+                w.BoundingBox.Right / PointsPerMm,
+                (page.Height - w.BoundingBox.Bottom) / PointsPerMm))
+            .ToList();
+    }
+
+    // Vertical positions (mm from the top) of drawn paths left of the text area.
+    private static List<double> MarkPositionsMm(byte[] pdf, int pageNumber)
+    {
+        using var doc = PdfDocument.Open(pdf);
+        var page = doc.GetPage(pageNumber);
+        return page.Paths
+            .Select(p => p.GetBoundingRectangle())
+            .OfType<UglyToad.PdfPig.Core.PdfRectangle>()
+            .Where(box => box.Right / PointsPerMm < 15)
+            .Select(box => Math.Round((page.Height - box.Top) / PointsPerMm, 1))
+            .Distinct()
+            .OrderBy(y => y)
+            .ToList();
+    }
+
+    private static int CountOf(string text, string marker) =>
+        (text.Length - text.Replace(marker, "").Length) / marker.Length;
 
     private static string Filler(int words) => string.Join(" ", Enumerable.Repeat("Leistungsbeschreibung", words));
 

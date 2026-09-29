@@ -36,7 +36,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 | Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + custom refresh-token store |
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
-| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 200 tests |
+| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 248 tests |
 
 ---
 
@@ -45,7 +45,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 ```bash
 docker compose up                    # postgres + api on :8080 (Development env, Swagger enabled)
 dotnet build                         # local build
-dotnet test                          # full xUnit suite (200 tests must stay green)
+dotnet test                          # full xUnit suite (248 tests must stay green)
 dotnet ef migrations add <Name> --project src/InvoiceApi
 dotnet ef database update --project src/InvoiceApi
 ```

@@ -1,5 +1,44 @@
 # Progress
 
+## PDF: Gesamtbetrag nie allein, DIN 5008 Form B, Footer ohne Adresse (2026-09-29)
+
+- **`PdfService`**: Die letzte Position und der Abschlussblock (Summe, § 19,
+  Zahlungsziel, Anmerkungen) liegen in einer gemeinsamen, tabellenbreiten Zelle
+  mit `ShowEntire()`. Passt der Abschlussblock nicht mehr unter die letzte
+  Position, wandern beide zusammen auf die nächste Seite. Weil die Zelle Teil
+  der Tabelle bleibt, wiederholt sich dort der Tabellenkopf. Die Zeile darin
+  spiegelt die Spaltendefinition (`PosColumnWidth` + `ItemColumnWidths`).
+  Ein kleinerer Footer war die Alternative; er gewinnt nur rund 30 pt, der
+  Block braucht rund 90 pt, und eine Garantie wäre es auch nicht.
+- Anlass: Rechnungsentwurf mit 3 Positionen, Seite 2 enthielt nur den
+  Gesamtbetrag und den § 19-Hinweis.
+- **Keine Adresse mehr im Footer**: Der Footer hat Live-Profildaten gelesen, der
+  Briefkopf nimmt den Rechnungs-Snapshot. § 14 Abs. 4 Nr. 1 UStG bzw. § 34a
+  UStDV verlangen die Anschrift einmal, nicht ihre Wiederholung. Footer jetzt:
+  Steuernummer/USt-IdNr. links, Bankverbindung rechts, Seitenzahl.
+- **DIN 5008 Form B (fensterumschlagtauglich, DL nach DIN 680)** auf Seite 1:
+  linker Rand 20 mm; Anschriftfeld 85 × 45 mm ab 45 mm von oben, darin die
+  Zusatz- und Vermerkzone (17,7 mm, Rücksendeangabe in der untersten Zeile)
+  und die Anschriftzone (27,3 mm). Informationsblock ab 50 mm. Falzmarken bei
+  105 und 210 mm (5 mm vom Rand, per `ShowOnce` im Page-Background). Die
+  optionale Lochmarke (148,5 mm) ist bewusst weggelassen: Als dritter Strich
+  wurde sie für eine dritte Falzmarke gehalten. Der Briefkopf bekommt nur auf Seite 1 eine `MinHeight`
+  (`ShowOnce`/`SkipOnce`), damit der Content genau bei 45 mm beginnt; Folgeseiten
+  bleiben unverändert. `MinHeight` statt `Height`: Ein ungewöhnlich hoher Briefkopf
+  oder eine lange Adresse verschieben das Feld, statt das PDF scheitern zu lassen.
+  Nachgemessen an echten Entwürfen: Rücksendeangabe 58–60 mm, Empfänger
+  64–79 mm, links 20 mm, Falzmarken 105/210 mm.
+- Der schmalere Satzspiegel (+6 mm links) ließ das künstliche Füllwort im
+  Seitenumbruch-Test nur noch einmal pro Zeile umbrechen; die längste
+  Testposition wurde höher als eine Seite (= Fallback-Fall). Testdaten auf
+  „passt auf eine Seite“ begrenzt, der Überlänge-Fall hat einen eigenen Test.
+- **Tests: 248 grün** (243 → +5): `Generate_ShouldNeverLeaveTheTotalAloneOnAPage`
+  (1–24 Positionen, der Gesamtbetrag steht immer auf der Seite der letzten
+  Position), `…SenderAddressOnlyInLetterheadAndWindow`,
+  `…RecipientInTheDin5008FormBAddressZone`, `…ReturnAddressInTheDin5008NoteZone`,
+  `…FoldMarksOnTheFirstPageOnly`. Positionen per PdfPig in mm geprüft.
+  Build `-warnaserror` sauber.
+
 ## PDF-Seitenumbruch: Positionen nie zerreißen (2026-09-27)
 
 ### Umgesetzt

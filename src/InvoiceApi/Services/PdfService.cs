@@ -24,6 +24,28 @@ public class PdfService : IPdfService
 
     private static readonly CultureInfo De = CultureInfo.GetCultureInfo("de-DE");
 
+    // Line-item columns: fixed "Pos." column, then Beschreibung, Menge, Einheit,
+    // Einzelpreis, Gesamt (relative widths).
+    private const float PosColumnWidth = 28;
+    private static readonly float[] ItemColumnWidths = [4, 1, 1, 1.5f, 1.5f];
+
+    // Page geometry in points. The left margin is DIN 5008's 20 mm so the address
+    // field lines up with a DL window envelope (DIN 680).
+    private const float PointsPerMm = 72f / 25.4f;
+    private const float PageMargin = 40;
+    private const float PageMarginLeft = 20 * PointsPerMm;
+    private const float ContentGap = 10;
+
+    // DIN 5008 Form B, measured from the top edge of page 1.
+    private const float AddressFieldTop = 45 * PointsPerMm;
+    private const float AddressFieldWidth = 85 * PointsPerMm;
+    private const float NoteZoneHeight = 17.7f * PointsPerMm;     // Zusatz- und Vermerkzone
+    private const float AddressZoneHeight = 27.3f * PointsPerMm;  // Anschriftzone
+    private const float InfoBlockTop = 50 * PointsPerMm;
+    // Falzmarken only — the optional Lochmarke (148.5 mm) read as a third fold.
+    private static readonly float[] FoldMarks = [105 * PointsPerMm, 210 * PointsPerMm];
+    private const float FoldMarkLength = 5 * PointsPerMm;
+
     // Program.cs sets this too; repeating it here keeps direct construction
     // (unit tests, seeding) license-safe.
     static PdfService() => QuestPDF.Settings.License = LicenseType.Community;
@@ -56,7 +78,8 @@ public class PdfService : IPdfService
             container.Page(page =>
             {
                 page.Size(PageSizes.A4);
-                page.Margin(40);
+                page.Margin(PageMargin);
+                page.MarginLeft(PageMarginLeft);
                 // Liberation Serif explicitly (not "Arial"): the original invoices
                 // rendered serif because the font-less base image fell back to a serif
                 // default. Once the Dockerfile added fontconfig, "Arial" started
@@ -68,7 +91,18 @@ public class PdfService : IPdfService
                     page.Foreground().AlignCenter().AlignMiddle()
                         .Text("ENTWURF").FontSize(96).Bold().FontColor("#e5e7eb");
 
-                page.Header().Element(c => ComposeHeader(c, invoice));
+                // Fold marks only on the sheet that gets folded into the envelope.
+                page.Background().ShowOnce().Element(ComposeFoldMarks);
+
+                page.Header().Column(header =>
+                {
+                    // Page 1: the letterhead reserves the space above the DIN 5008 address
+                    // field, so the content starts exactly at 45 mm. MinHeight, not Height:
+                    // an unusually tall letterhead pushes the field down instead of failing.
+                    header.Item().ShowOnce().MinHeight(AddressFieldTop - PageMargin - ContentGap)
+                        .Element(c => ComposeHeader(c, invoice));
+                    header.Item().SkipOnce().Element(c => ComposeHeader(c, invoice));
+                });
                 page.Content().Element(c => ComposeContent(c, invoice, user, smallBusiness, taxRate, keepTogether));
                 page.Footer().Element(c => ComposeFooter(c, user));
             });
@@ -104,33 +138,36 @@ public class PdfService : IPdfService
 
     private static void ComposeContent(IContainer container, Invoice invoice, User user, bool smallBusiness, decimal taxRate, bool keepTogether)
     {
-        container.PaddingTop(10).Column(col =>
+        container.PaddingTop(ContentGap).Column(col =>
         {
             col.Spacing(16);
 
-            // Absenderzeile + recipient block, info column right
+            // DIN 5008 Form B address field (85 × 45 mm at 20 mm / 45 mm) — what a DL
+            // window envelope shows — with the Informationsblock to its right. MinHeight,
+            // not Height: an unusually long address grows instead of failing the PDF.
             col.Item().PaddingBottom(10).Row(row =>
             {
-                row.RelativeItem().Column(c =>
+                row.ConstantItem(AddressFieldWidth).Column(field =>
                 {
-                    // DIN 5008 Absenderzeile: separated from the recipient by a thin
-                    // rule (same stroke as the footer) instead of a font underline,
-                    // which sat directly on the recipient name. Shrink() reduces the
-                    // rule to the sender line's own width, so it ends with the address
-                    // text instead of running the full column width.
-                    c.Item().Shrink().Column(sender =>
+                    // Zusatz- und Vermerkzone: Rücksendeangabe in its bottom line. The
+                    // thin rule (same stroke as the footer) ends with the text (Shrink).
+                    field.Item().MinHeight(NoteZoneHeight).AlignBottom().PaddingBottom(4).Shrink().Column(sender =>
                     {
                         sender.Item().Text(SenderLine(invoice)).FontSize(7).FontColor(MutedColor);
                         sender.Item().PaddingTop(2).LineHorizontal(0.5f).LineColor("#d1d5db");
                     });
-                    // Gap below the rule == gap above the Absenderzeile (content
-                    // PaddingTop), so the underlined line sits symmetrically between
-                    // the sender header and the recipient.
-                    c.Item().PaddingTop(11).Text(invoice.RecipientName).FontSize(12).Bold();
-                    c.Item().Text(RecipientAddress(invoice)).FontSize(10);
+
+                    // Anschriftzone
+                    field.Item().MinHeight(AddressZoneHeight).Column(address =>
+                    {
+                        address.Item().Text(invoice.RecipientName).FontSize(12).Bold();
+                        address.Item().Text(RecipientAddress(invoice)).FontSize(10);
+                    });
                 });
 
-                row.ConstantItem(220).Column(c =>
+                row.RelativeItem();
+
+                row.ConstantItem(220).PaddingTop(InfoBlockTop - AddressFieldTop).Column(c =>
                 {
                     InfoRow(c, "Rechnungsnummer", invoice.Number ?? "Entwurf");
                     InfoRow(c, "Rechnungsdatum", Date(invoice.IssueDate));
@@ -154,17 +191,16 @@ public class PdfService : IPdfService
                 col.Item().Text($"Stornorechnung zu Rechnung {invoice.CancellationOfNumber}")
                     .Bold().FontColor(PrimaryColor);
 
+            var items = invoice.LineItems.OrderBy(li => li.Position).ToList();
+
             // line items
             col.Item().Table(table =>
             {
                 table.ColumnsDefinition(c =>
                 {
-                    c.ConstantColumn(28);
-                    c.RelativeColumn(4);
-                    c.RelativeColumn(1);
-                    c.RelativeColumn(1);
-                    c.RelativeColumn(1.5f);
-                    c.RelativeColumn(1.5f);
+                    c.ConstantColumn(PosColumnWidth);
+                    foreach (var width in ItemColumnWidths)
+                        c.RelativeColumn(width);
                 });
 
                 table.Header(h =>
@@ -181,8 +217,9 @@ public class PdfService : IPdfService
                     }
                 });
 
-                foreach (var (item, index) in invoice.LineItems.OrderBy(li => li.Position).Select((x, i) => (x, i)))
+                for (var index = 0; index < items.Count; index++)
                 {
+                    var item = items[index];
                     var bg = index % 2 == 0 ? "#ffffff" : "#f8f9fa";
 
                     // FlatRate: display-only collapse to 1 × pauschal × line total.
@@ -194,78 +231,103 @@ public class PdfService : IPdfService
                     var unit = flat ? "flat" : item.Unit;
                     var unitPrice = flat ? Math.Abs(item.Total) : item.UnitPrice;
 
-                    // ShowEntire on every cell: a position that doesn't fit the rest of
-                    // the page moves to the next one as a whole instead of splitting.
-                    IContainer Cell()
+                    // cell(column) hands out the six containers in column order
+                    void ItemCells(Func<int, IContainer> cell)
                     {
-                        IContainer cell = table.Cell();
-                        if (keepTogether)
-                            cell = cell.ShowEntire();
-                        return cell.Background(bg).Padding(6);
+                        cell(0).Text($"{index + 1}").FontColor(MutedColor);
+                        cell(1).Text(item.Description);
+                        cell(2).AlignRight().Text(quantity.ToString("0.##", De));
+                        cell(3).Text(UnitLabel(unit)).FontColor(MutedColor);
+                        cell(4).AlignRight().Text(Amount(unitPrice, invoice.Currency));
+                        cell(5).AlignRight().Text(Amount(item.Total, invoice.Currency));
                     }
 
-                    Cell().Text($"{index + 1}").FontColor(MutedColor);
-                    Cell().Text(item.Description);
-                    Cell().AlignRight().Text(quantity.ToString("0.##", De));
-                    Cell().Text(UnitLabel(unit)).FontColor(MutedColor);
-                    Cell().AlignRight().Text(Amount(unitPrice, invoice.Currency));
-                    Cell().AlignRight().Text(Amount(item.Total, invoice.Currency));
+                    if (index < items.Count - 1)
+                    {
+                        // ShowEntire on every cell: a position that doesn't fit the rest of
+                        // the page moves to the next one as a whole instead of splitting.
+                        ItemCells(_ =>
+                        {
+                            IContainer cell = table.Cell();
+                            if (keepTogether)
+                                cell = cell.ShowEntire();
+                            return cell.Background(bg).Padding(6);
+                        });
+                        continue;
+                    }
+
+                    // The last position shares one full-width cell with the closing block,
+                    // so no page break can fall between them: the total never stands alone
+                    // on a page. Staying inside the table keeps the repeated header when
+                    // both move to the next page. The row mirrors the column definition.
+                    IContainer last = table.Cell().ColumnSpan(1 + (uint)ItemColumnWidths.Length);
+                    if (keepTogether)
+                        last = last.ShowEntire();
+
+                    last.Column(block =>
+                    {
+                        block.Item().Row(row => ItemCells(column =>
+                            (column == 0 ? row.ConstantItem(PosColumnWidth) : row.RelativeItem(ItemColumnWidths[column - 1]))
+                                .Background(bg).Padding(6)));
+                        block.Item().PaddingTop(16).Element(c => ComposeClosing(c, invoice, smallBusiness, taxRate));
+                    });
                 }
             });
 
-            // closing block — total, legal notices, payment terms and notes move to
-            // the next page as a whole instead of leaving a lone line behind
-            IContainer closing = col.Item();
-            if (keepTogether)
-                closing = closing.ShowEntire();
+            if (items.Count == 0)
+                col.Item().Element(c => ComposeClosing(c, invoice, smallBusiness, taxRate));
+        });
+    }
 
-            closing.Column(end =>
+    // closing block — total, legal notices, payment terms and notes
+    private static void ComposeClosing(IContainer container, Invoice invoice, bool smallBusiness, decimal taxRate)
+    {
+        container.Column(end =>
+        {
+            end.Spacing(16);
+
+            // totals — § 19: no VAT line at all, total = net
+            var net = invoice.Subtotal;
+            var vat = Math.Round(net * taxRate, 2);
+
+            end.Item().AlignRight().Column(totals =>
             {
-                end.Spacing(16);
+                totals.Spacing(4);
 
-                // totals — § 19: no VAT line at all, total = net
-                var net = invoice.Subtotal;
-                var vat = Math.Round(net * taxRate, 2);
-
-                end.Item().AlignRight().Column(totals =>
+                if (!smallBusiness)
                 {
-                    totals.Spacing(4);
-
-                    if (!smallBusiness)
-                    {
-                        TotalRow(totals, "Nettobetrag", Amount(net, invoice.Currency));
-                        TotalRow(totals, $"zzgl. {taxRate.ToString("P0", De)} USt.", Amount(vat, invoice.Currency));
-                    }
-
-                    totals.Item().LineHorizontal(1).LineColor(PrimaryColor);
-
-                    totals.Item().Row(r =>
-                    {
-                        r.ConstantItem(120).Text("Gesamtbetrag").Bold().FontSize(12);
-                        r.ConstantItem(120).AlignRight()
-                            .Text(Amount(net + vat, invoice.Currency))
-                            .Bold().FontSize(12).FontColor(PrimaryColor);
-                    });
-                });
-
-                if (smallBusiness)
-                    end.Item().Text("Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.").FontSize(9);
-
-                if (invoice.Type == InvoiceType.Cancellation)
-                    end.Item().Text("Der Betrag wird entsprechend verrechnet bzw. erstattet.")
-                        .FontSize(9).FontColor(MutedColor);
-                else
-                    end.Item().Text($"Zahlbar ohne Abzug bis {Date(invoice.DueDate)}.").FontSize(9);
-
-                if (!string.IsNullOrWhiteSpace(invoice.Notes))
-                {
-                    end.Item().Column(n =>
-                    {
-                        n.Item().Text("Anmerkungen").Bold().FontSize(9).FontColor(MutedColor);
-                        n.Item().Text(invoice.Notes).FontSize(9);
-                    });
+                    TotalRow(totals, "Nettobetrag", Amount(net, invoice.Currency));
+                    TotalRow(totals, $"zzgl. {taxRate.ToString("P0", De)} USt.", Amount(vat, invoice.Currency));
                 }
+
+                totals.Item().LineHorizontal(1).LineColor(PrimaryColor);
+
+                totals.Item().Row(r =>
+                {
+                    r.ConstantItem(120).Text("Gesamtbetrag").Bold().FontSize(12);
+                    r.ConstantItem(120).AlignRight()
+                        .Text(Amount(net + vat, invoice.Currency))
+                        .Bold().FontSize(12).FontColor(PrimaryColor);
+                });
             });
+
+            if (smallBusiness)
+                end.Item().Text("Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.").FontSize(9);
+
+            if (invoice.Type == InvoiceType.Cancellation)
+                end.Item().Text("Der Betrag wird entsprechend verrechnet bzw. erstattet.")
+                    .FontSize(9).FontColor(MutedColor);
+            else
+                end.Item().Text($"Zahlbar ohne Abzug bis {Date(invoice.DueDate)}.").FontSize(9);
+
+            if (!string.IsNullOrWhiteSpace(invoice.Notes))
+            {
+                end.Item().Column(n =>
+                {
+                    n.Item().Text("Anmerkungen").Bold().FontSize(9).FontColor(MutedColor);
+                    n.Item().Text(invoice.Notes).FontSize(9);
+                });
+            }
         });
     }
 
@@ -295,11 +357,8 @@ public class PdfService : IPdfService
 
             col.Item().Row(row =>
             {
-                row.RelativeItem().Column(c =>
-                {
-                    c.Item().Text(FooterAddress(user)).FontSize(7.5f).FontColor(MutedColor);
-                    c.Item().Text(FooterTaxIds(user)).FontSize(7.5f).FontColor(MutedColor);
-                });
+                // no address here — the letterhead repeats on every page
+                row.RelativeItem().Text(FooterTaxIds(user)).FontSize(7.5f).FontColor(MutedColor);
 
                 if (!string.IsNullOrWhiteSpace(user.Iban))
                 {
@@ -325,7 +384,20 @@ public class PdfService : IPdfService
         });
     }
 
-    // Absenderzeile above the recipient window — from the invoice's own snapshot,
+    // DIN 5008 fold marks (105 / 210 mm), 5 mm in from the left edge — outside the
+    // 20 mm text margin, inside a printer's printable area.
+    private static void ComposeFoldMarks(IContainer container)
+    {
+        container.Layers(layers =>
+        {
+            layers.PrimaryLayer();
+            foreach (var top in FoldMarks)
+                layers.Layer().PaddingTop(top).PaddingLeft(5 * PointsPerMm).Width(FoldMarkLength)
+                    .LineHorizontal(0.5f).LineColor(MutedColor);
+        });
+    }
+
+    // Rücksendeangabe for the envelope window — from the invoice's own snapshot,
     // never live settings, so archived PDFs stay self-consistent.
     private static string SenderLine(Invoice invoice)
     {
@@ -349,13 +421,6 @@ public class PdfService : IPdfService
         var lines = new[] { invoice.RecipientStreet, cityLine, invoice.RecipientCountryCode }
             .Where(p => !string.IsNullOrWhiteSpace(p));
         return string.Join("\n", lines);
-    }
-
-    private static string FooterAddress(User user)
-    {
-        var parts = new[] { user.Street, $"{user.PostalCode} {user.City}".Trim(), user.Country }
-            .Where(p => !string.IsNullOrWhiteSpace(p));
-        return string.Join(", ", parts);
     }
 
     private static string FooterTaxIds(User user)
