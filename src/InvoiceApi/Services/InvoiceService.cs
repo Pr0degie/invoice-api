@@ -2,6 +2,7 @@ using InvoiceApi.Data;
 using InvoiceApi.Exceptions;
 using InvoiceApi.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace InvoiceApi.Services;
 
@@ -535,6 +536,12 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
                 await db.SaveChangesAsync(ct);
                 return;
             }
+            catch (DbUpdateException ex) when (IsDuplicateStorno(ex))
+            {
+                // A concurrent request cancelled the same invoice first. Retrying
+                // with the next number would only hit the same index again.
+                throw new ConflictException("This invoice has already been cancelled.");
+            }
             catch (DbUpdateException) when (!keepExistingNumber && attempt < MaxNumberingAttempts)
             {
                 // Lost the race (concurrency token or unique index). Drop our stale
@@ -546,6 +553,13 @@ public class InvoiceService(AppDbContext db, ICurrentUserService currentUser, IP
             }
         }
     }
+
+    public static bool IsDuplicateStorno(DbUpdateException ex) =>
+        ex.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: AppDbContext.StornoPerInvoiceIndex
+        };
 
     private async Task<string> ReserveNumberAsync(Guid userId, int year, CancellationToken ct)
     {
