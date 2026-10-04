@@ -159,12 +159,14 @@ Content-Type: application/json
 
 ## Demo
 
-A demo user is seeded automatically on the first startup when `Seed:Enabled=true` (default in Production):
+A demo user is seeded on the first startup (empty database) when `Seed:Enabled=true` — the default in Development; Production needs the explicit `Seed__Enabled=true`, meant for the demo instance only:
 
 | | |
 |---|---|
 | **Email** | `demo@invoiceflow.app` |
 | **Password** | `DemoPass123!` |
+
+Because the password is public, the demo account can't change its password, request a reset link or delete itself (`403 demo_account_readonly`). Invoices and profile stay editable.
 
 The demo account includes 15 invoices across 6 recipients, various statuses (Draft, Finalized — shown as "Open", some of them overdue — Paid, Cancelled), and 11 months of history — enough to make the dashboard stats meaningful.
 
@@ -176,7 +178,7 @@ The demo account includes 15 invoices across 6 recipients, various statuses (Dra
 dotnet test
 ```
 
-200 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, PDF page breaks (a line item or the closing block never splits across pages), XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, auth flows (incl. e-mail verification, password reset, and anti-enumeration), the refresh-token cleanup rule, and the fail-fast e-mail/SMTP startup validation.
+263 unit tests covering service logic, totals, line-item ordering, number generation, finalize/cancel/reopen lifecycle (incl. issue-date stamping and number reuse after reopen), PDF + E-Rechnung XML archiving, PDF page breaks (a line item or the closing block never splits across pages), XRechnung generation (Kleinunternehmer / Regelbesteuerung / Storno golden cases), audit trail, user isolation, stats aggregation, auth flows (incl. e-mail verification, password reset, and anti-enumeration), the refresh-token cleanup rule, and the fail-fast e-mail/SMTP startup validation.
 
 ---
 

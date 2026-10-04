@@ -438,6 +438,48 @@ public class AuthServiceTests : IDisposable
         (await _db.RefreshTokens.CountAsync(t => t.UserId == userId)).Should().Be(0);
     }
 
+    // ── Demo account ────────────────────────────────────────────────────────
+    // Its password is public (README, login page): without these guards any
+    // visitor could lock everyone else out or delete it — and it never re-seeds.
+
+    [Fact]
+    public async Task ChangePassword_DemoAccount_IsForbidden_AndKeepsThePassword()
+    {
+        var demo = await RegisterVerifiedAsync(SeedService.DemoEmail, SeedService.DemoPassword);
+
+        var act = () => _sut.ChangePasswordAsync(demo.Id,
+            new ChangePasswordDto(SeedService.DemoPassword, "newpassword123"));
+
+        await act.Should().ThrowAsync<ForbiddenException>().WithMessage("demo_account_readonly");
+        var login = await _sut.LoginAsync(new LoginDto(SeedService.DemoEmail, SeedService.DemoPassword));
+        login.Token.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteAccount_DemoAccount_IsForbidden_AndKeepsTheUser()
+    {
+        var demo = await RegisterVerifiedAsync(SeedService.DemoEmail, SeedService.DemoPassword);
+
+        var act = () => _sut.DeleteAccountAsync(demo.Id);
+
+        await act.Should().ThrowAsync<ForbiddenException>().WithMessage("demo_account_readonly");
+        (await _db.Users.AnyAsync(u => u.Id == demo.Id && u.DeletedAt == null)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ForgotPassword_DemoAccount_SendsNoResetLink_ButAnswersGenerically()
+    {
+        await RegisterVerifiedAsync(SeedService.DemoEmail, SeedService.DemoPassword);
+        var mailsBefore = _email.Messages.Count;
+
+        var demo = await _sut.ForgotPasswordAsync(new ForgotPasswordDto(SeedService.DemoEmail));
+        var unknown = await _sut.ForgotPasswordAsync(new ForgotPasswordDto("ghost@example.com"));
+
+        _email.Messages.Should().HaveCount(mailsBefore);
+        (await _db.UserTokens.AnyAsync(t => t.Type == UserTokenType.PasswordReset)).Should().BeFalse();
+        demo.Message.Should().Be(unknown.Message);
+    }
+
     [Fact]
     public async Task DeleteAccount_NonExistent_ThrowsUnauthorized()
     {

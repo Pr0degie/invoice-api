@@ -15,6 +15,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<InvoiceNumberSequence> InvoiceNumberSequences => Set<InvoiceNumberSequence>();
     public DbSet<InvoiceAuditEntry> InvoiceAuditEntries => Set<InvoiceAuditEntry>();
 
+    public const string StornoPerInvoiceIndex = "IX_Invoices_CancellationOfId";
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<Invoice>(e =>
@@ -41,6 +43,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
              .WithMany()
              .HasForeignKey(x => x.CancellationOfId)
              .OnDelete(DeleteBehavior.SetNull);
+            // At most one storno per invoice. CancelAsync checks the status first,
+            // but two concurrent requests (double click) both read Finalized —
+            // only the database can refuse the second one.
+            e.HasIndex(x => x.CancellationOfId).IsUnique()
+             .HasDatabaseName(StornoPerInvoiceIndex);
             e.Property(x => x.Currency).HasMaxLength(3);
             e.Property(x => x.TaxRate).HasPrecision(5, 4);
             e.HasMany(x => x.LineItems)

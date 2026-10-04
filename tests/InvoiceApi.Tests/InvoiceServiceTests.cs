@@ -757,6 +757,40 @@ public class InvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public void Model_ShouldAllowOnlyOneStornoPerInvoice()
+    {
+        // The status check in CancelAsync can't stop two concurrent requests
+        // (double click): both read Finalized. The database has to.
+        var index = _db.Model.FindEntityType(typeof(Invoice))!.GetIndexes()
+            .Single(i => i.Properties.Count == 1 && i.Properties[0].Name == nameof(Invoice.CancellationOfId));
+
+        index.IsUnique.Should().BeTrue();
+        index.GetDatabaseName().Should().Be(AppDbContext.StornoPerInvoiceIndex);
+    }
+
+    [Fact]
+    public void IsDuplicateStorno_ShouldRecognizeTheLostRace()
+    {
+        var lostRace = new DbUpdateException("save failed", new Npgsql.PostgresException(
+            "duplicate key value violates unique constraint", "ERROR", "ERROR", "23505",
+            constraintName: AppDbContext.StornoPerInvoiceIndex));
+
+        InvoiceService.IsDuplicateStorno(lostRace).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsDuplicateStorno_ShouldIgnoreOtherUniqueViolations()
+    {
+        // A number collision must keep going through the numbering retry
+        var numberCollision = new DbUpdateException("save failed", new Npgsql.PostgresException(
+            "duplicate key value violates unique constraint", "ERROR", "ERROR", "23505",
+            constraintName: "IX_Invoices_UserId_Number"));
+
+        InvoiceService.IsDuplicateStorno(numberCollision).Should().BeFalse();
+        InvoiceService.IsDuplicateStorno(new DbUpdateException("save failed")).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task CancelAsync_ShouldThrowConflict_ForCancellationInvoice()
     {
         var id = await CreateFinalized();

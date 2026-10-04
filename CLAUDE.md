@@ -36,7 +36,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 | Auth | `Microsoft.AspNetCore.Authentication.JwtBearer` + custom refresh-token store |
 | PDF | QuestPDF |
 | Logging | Serilog (JSON structured to stdout) |
-| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 248 tests |
+| Testing | xUnit + EF Core InMemory/SQLite (service-level, no WebApplicationFactory), 263 tests |
 
 ---
 
@@ -45,7 +45,7 @@ Deployed via Coolify (Docker) on a Hetzner VPS. Frontend authenticates via crede
 ```bash
 docker compose up                    # postgres + api on :8080 (Development env, Swagger enabled)
 dotnet build                         # local build
-dotnet test                          # full xUnit suite (248 tests must stay green)
+dotnet test                          # full xUnit suite (263 tests must stay green)
 dotnet ef migrations add <Name> --project src/InvoiceApi
 dotnet ef database update --project src/InvoiceApi
 ```
@@ -121,6 +121,13 @@ These are tracked here so the next agent picks the right one:
 - [ ] **Coolify staging deploy** — first production push to the Hetzner VPS. Env-var checklist: `docs/deploy.md`.
 - [ ] **Swagger in Production** — currently disabled. Enable behind a flag (`Swagger:Enabled` config) for portfolio visibility.
 - [ ] **Rate limiting** — currently global. Per-user limits (after auth middleware) would be safer.
+- [ ] **Register reveals registered addresses** — `POST /register` answers 409 on a duplicate e-mail. Needs a
+  decision: generic 201 + "you already have an account" mail (changes the contract; needs working SMTP).
+- [ ] **CORS `PreviewOriginSuffix`** — plain `EndsWith` on the host. Unused on Coolify; remove or match a full label.
+- [ ] **XRechnung currency** — `EInvoiceService` always writes EUR while `Currency` is free input (form: EUR/USD/CHF).
+  Needs a decision: EUR only, or proper foreign-currency invoices (VAT amount in EUR, BT-6/BT-111).
+- [ ] **Demo data never resets** — the demo account is protected (`demo_account_readonly`), its invoices/profile are not.
+- [ ] **Backups** — Coolify scheduled Postgres backups to off-box storage + a documented restore drill (GoBD retention).
 - [ ] **E-mail outbox** — delivery is queued in-process (`IEmailQueue`, no retry/persistence); a crash drops undelivered mail. If transactional/high-value mail is ever added, move to a durable outbox (persist in the triggering DB tx, worker delivers + marks sent, with retry). See ADR 0006 Consequences.
 
 ---
