@@ -165,7 +165,7 @@ EmailStartupValidation.Validate(app.Configuration, app.Environment.IsProduction(
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    await DatabaseStartup.MigrateWithRetryAsync(() => db.Database.MigrateAsync(), app.Logger);
 
     // Demo seeding in Production is an explicit opt-in (Seed__Enabled=true on the demo instance only)
     if (app.Configuration.GetValue<bool>("Seed:Enabled"))
