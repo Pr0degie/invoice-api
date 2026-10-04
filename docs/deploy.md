@@ -44,7 +44,7 @@ One line per variable: what it does, and whether you must set it.
 | `Cors__AllowedOrigins__0` | Exact browser origin allowed for direct API calls, e.g. `https://app.example.com`. The frontend proxies API calls server-side, so this only matters for direct browser access (e.g. Swagger tooling), but set it to the frontend URL anyway. |
 | `Cors__PreviewOriginSuffix` | Optional host suffix for preview deployments (empty = disabled). |
 | `Database__TrustServerCertificate` | Default `false` (TLS certs are validated). Set `true` only for a Postgres that presents an unverifiable cert — not needed for a Coolify-internal database. |
-| `Seed__Enabled` | `true` seeds the demo account (`demo@invoiceflow.app`) once on an empty database. Default in Production is `false`; enable only on the demo instance. |
+| `Seed__Enabled` | `true` seeds the demo account (`demo@invoiceflow.app`) once on an empty database. Default in Production is `false`; enable only on the demo instance — never on one holding real invoices (the password is public). The demo account can't change its password or delete itself (`403 demo_account_readonly`). |
 | `Jwt__Issuer` / `Jwt__Audience` | Token issuer/audience, defaults `invoice-api` / `invoiceflow`. Leave as-is unless you run multiple instances. |
 | `Jwt__AccessTokenMinutes` / `Jwt__RefreshTokenDays` | Token lifetimes, defaults `15` / `30`. |
 | `RefreshTokenCleanup__Interval` / `RefreshTokenCleanup__Retention` | Background cleanup of expired/revoked refresh tokens, defaults `06:00:00` (run every 6 h) / `7.00:00:00` (keep 7 days past expiry/revocation). Leave as-is. |

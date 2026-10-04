@@ -193,7 +193,8 @@ public class AuthService(
         var normalizedEmail = dto.Email.ToLowerInvariant();
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail, ct);
 
-        if (user is not null)
+        // The demo account never gets a reset link — handled like an unknown address.
+        if (user is not null && !IsDemoAccount(user))
         {
             var rawToken = await CreateUserTokenAsync(user.Id, UserTokenType.PasswordReset, PasswordResetTtl, ct);
             await db.SaveChangesAsync(ct);
@@ -421,6 +422,7 @@ public class AuthService(
     public async Task ChangePasswordAsync(Guid userId, ChangePasswordDto dto, CancellationToken ct = default)
     {
         var user = await GetActiveUserAsync(userId, ct);
+        EnsureNotDemoAccount(user);
 
         if (!passwordHasher.Verify(dto.CurrentPassword, user.PasswordHash))
             throw new ValidationException("invalid_current_password");
@@ -438,6 +440,7 @@ public class AuthService(
     public async Task DeleteAccountAsync(Guid userId, CancellationToken ct = default)
     {
         var user = await GetActiveUserAsync(userId, ct);
+        EnsureNotDemoAccount(user);
 
         // GoBD/§ 147 AO (ADR 0005): numbered invoices are Buchungsbelege under an
         // 8-year retention duty — they must survive account deletion. "Numbered"
@@ -503,6 +506,17 @@ public class AuthService(
         if (user is null || user.DeletedAt is not null)
             throw new UnauthorizedException("User not found.");
         return user;
+    }
+
+    // The demo account's password is public, so every visitor shares it: nobody
+    // may change the credentials or delete the account. Its invoices and profile
+    // stay editable — trying those out is what the demo is for.
+    private static bool IsDemoAccount(User user) => user.Email == SeedService.DemoEmail;
+
+    private static void EnsureNotDemoAccount(User user)
+    {
+        if (IsDemoAccount(user))
+            throw new ForbiddenException("demo_account_readonly");
     }
 
     private AuthResponseDto BuildAuthResponse(User user, string refreshToken)

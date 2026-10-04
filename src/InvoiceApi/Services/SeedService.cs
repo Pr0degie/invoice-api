@@ -33,6 +33,7 @@ public class SeedService(AppDbContext db, IPasswordHasher hasher, IPdfService pd
             PostalCode = "80331",
             City = "München",
             Country = "Deutschland",
+            Phone = "+49 89 12345678",
             Iban = "DE89370400440532013000",
             Bic = "COBADEFFXXX",
             BankName = "Commerzbank München",

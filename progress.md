@@ -1,5 +1,31 @@
 # Progress
 
+## Deploy-Readiness: Storno-Race, Demo-Account, DB-Start (2026-10-04)
+
+- **Storno-Doppelklick**: `CancelAsync` prüft den Status, zwei gleichzeitige
+  Requests lesen aber beide `Finalized` und erzeugten zwei Stornorechnungen.
+  Neuer Unique-Index `IX_Invoices_CancellationOfId` (Migration
+  `UniqueStornoPerInvoice`, ersetzt den nicht-eindeutigen FK-Index; NULLs
+  bleiben beliebig oft erlaubt). `AssignNumberAndSaveAsync` erkennt genau
+  diese Verletzung (`IsDuplicateStorno`: 23505 + Constraint-Name) und wirft
+  `ConflictException` → 409, statt sie wie eine Nummernkollision fünfmal zu
+  wiederholen. Live gegen Postgres: 4 parallele `/cancel` → 200, 409, 409, 409,
+  genau eine Stornorechnung. Die Migration scheitert, falls eine Datenbank
+  bereits doppelte Stornos enthält — dann vorher bereinigen.
+- **Demo-Account** (`demo@invoiceflow.app`, Passwort öffentlich): Passwort
+  ändern und Konto löschen → `403 demo_account_readonly`; `forgot-password`
+  verhält sich wie bei einer unbekannten Adresse (kein Token, keine Mail,
+  gleiche Antwort). Rechnungen und Profil bleiben editierbar. Ein Zurücksetzen
+  der Demo-Daten gibt es weiterhin nicht. Seed-Profil hat jetzt eine
+  Telefonnummer — ohne sie ließ sich im Demo-Account seit der E-Rechnung
+  nichts festschreiben. `.env.example`: `Seed__Enabled=false`.
+- **DB-Start**: `DatabaseStartup.MigrateWithRetryAsync` wiederholt die
+  Start-Migration bei transienten Npgsql-Fehlern (10 Versuche, 3 s Pause)
+  statt den Container abstürzen zu lassen. Bewusst kein `EnableRetryOnFailure`
+  (explizite Transaktion in `DeleteAccountAsync`). Live: API ohne DB gestartet,
+  DB nachgezogen → healthy.
+- **Tests: 257 grün** (248 → +9). Build `-warnaserror` sauber.
+
 ## PDF: Gesamtbetrag nie allein, DIN 5008 Form B, Footer ohne Adresse (2026-09-29)
 
 - **`PdfService`**: Die letzte Position und der Abschlussblock (Summe, § 19,
