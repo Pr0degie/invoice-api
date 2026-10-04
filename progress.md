@@ -24,7 +24,16 @@
   statt den Container abstürzen zu lassen. Bewusst kein `EnableRetryOnFailure`
   (explizite Transaktion in `DeleteAccountAsync`). Live: API ohne DB gestartet,
   DB nachgezogen → healthy.
-- **Tests: 257 grün** (248 → +9). Build `-warnaserror` sauber.
+- **Logs**: Empfängeradressen im Versand- und Fehler-Log maskiert
+  (`LogRedaction.MaskEmail`, `t***@example.com`). `LogEmailSender` schreibt
+  weiterhin die ganze Mail — er ist nur für Development gedacht.
+- **CI**: wöchentlicher Lauf (montags 05:00 UTC), damit der Vulnerability-Scan
+  auch ohne Push anschlägt; neuer Job baut das Docker-Image.
+- **Tests: 263 grün** (248 → +15). Build `-warnaserror` sauber.
+- Offen geblieben (brauchen eine Entscheidung): Register-409 verrät
+  registrierte Adressen, CORS `PreviewOriginSuffix` ist ein reiner
+  Suffix-Vergleich, XRechnung schreibt immer EUR, auch wenn die Rechnung eine
+  andere Währung hat.
 
 ## PDF: Gesamtbetrag nie allein, DIN 5008 Form B, Footer ohne Adresse (2026-09-29)
 

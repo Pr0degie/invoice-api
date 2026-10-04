@@ -31,7 +31,7 @@ public class EmailBackgroundService(
             {
                 logger.LogError(ex,
                     "E-Mail an {To} konnte nicht versendet werden (Betreff: {Subject})",
-                    message.To, message.Subject);
+                    LogRedaction.MaskEmail(message.To), message.Subject);
             }
         }
     }

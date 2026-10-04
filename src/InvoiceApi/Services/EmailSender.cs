@@ -63,6 +63,7 @@ public class SmtpEmailSender(IConfiguration config, ILogger<SmtpEmailSender> log
         await client.SendAsync(message, ct);
         await client.DisconnectAsync(true, ct);
 
-        logger.LogInformation("E-Mail an {To} versendet (Betreff: {Subject})", toEmail, subject);
+        logger.LogInformation("E-Mail an {To} versendet (Betreff: {Subject})",
+            LogRedaction.MaskEmail(toEmail), subject);
     }
 }
